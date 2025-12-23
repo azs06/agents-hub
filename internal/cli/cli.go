@@ -53,7 +53,7 @@ func Run() int {
 }
 
 func usage() {
-	fmt.Println("a2a-hub <command> [options]")
+	fmt.Println("agents-hub <command> [options]")
 	fmt.Println("Commands: start, stop, status, agents, send, tasks, tui")
 }
 
@@ -186,7 +186,7 @@ func runSend(args []string) int {
 		return 1
 	}
 	if fs.NArg() < 2 {
-		fmt.Println("usage: a2a-hub send <agent-id> \"message\"")
+		fmt.Println("usage: agents-hub send <agent-id> \"message\"")
 		return 1
 	}
 	agentID := fs.Arg(0)

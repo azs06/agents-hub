@@ -14,19 +14,19 @@ This is a Go implementation of the A2A Local Hub defined in `SPECIFICATION.md`. 
 ## Build
 
 ```bash
-go build ./cmd/a2a-hub
+go build ./cmd/agents-hub
 ```
 
 ## Quickstart
 
 ```bash
-./a2a-hub
+./agents-hub
 ```
 
 In another terminal:
 
 ```bash
-./a2a-hub send codex "Write a hello world function in Go"
+./agents-hub send codex "Write a hello world function in Go"
 ```
 
 ## Run the Hub
@@ -34,7 +34,7 @@ In another terminal:
 Start the hub in the foreground:
 
 ```bash
-./a2a-hub start --foreground
+./agents-hub start --foreground
 ```
 
 Common options:
@@ -56,7 +56,7 @@ Environment:
 Stop the hub:
 
 ```bash
-./a2a-hub stop
+./agents-hub stop
 ```
 
 ## CLI Usage
@@ -64,25 +64,25 @@ Stop the hub:
 Check hub status:
 
 ```bash
-./a2a-hub status
+./agents-hub status
 ```
 
 List agents (with health):
 
 ```bash
-./a2a-hub agents --health
+./agents-hub agents --health
 ```
 
 Send a message to an agent:
 
 ```bash
-./a2a-hub send codex "Write a hello world function in Go"
+./agents-hub send codex "Write a hello world function in Go"
 ```
 
 List recent tasks:
 
 ```bash
-./a2a-hub tasks --limit 20
+./agents-hub tasks --limit 20
 ```
 
 ## TUI
@@ -90,13 +90,13 @@ List recent tasks:
 Launch the Bubble Tea terminal UI (default when no subcommand is used):
 
 ```bash
-./a2a-hub
+./agents-hub
 ```
 
 Explicit launch:
 
 ```bash
-./a2a-hub tui
+./agents-hub tui
 ```
 
 TUI options:

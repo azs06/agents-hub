@@ -1,8 +1,8 @@
 # Plan: Bubble Tea TUI as Default Entry
 
 ## Goals
-- Launch into a Bubble Tea TUI by default when running `a2a-hub` with no subcommand.
-- Keep existing CLI commands available (e.g., `a2a-hub start`, `status`, etc.).
+- Launch into a Bubble Tea TUI by default when running `agents-hub` with no subcommand.
+- Keep existing CLI commands available (e.g., `agents-hub start`, `status`, etc.).
 - Provide a full‑screen interactive UI inspired by `sst/opencode` for browsing status, agents, tasks, and sending messages.
 - Move hub lifecycle (start/stop/health) into the TUI flow so the hub starts in‑process and can be controlled there.
 
@@ -41,8 +41,8 @@
 - `github.com/charmbracelet/lipgloss`
 
 ## Validation
-- Run `go build ./cmd/a2a-hub`.
-- Launch `./a2a-hub` and verify:
+- Run `go build ./cmd/agents-hub`.
+- Launch `./agents-hub` and verify:
   - TUI starts, hub is running in-process.
   - Status, agents, tasks views work.
   - Sending a message returns a response.

@@ -37,3 +37,4 @@ go.work.sum
 # Common build output directories (uncomment if you use them)
 # /bin/
 # /dist/
+/agents-hub

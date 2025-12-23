@@ -686,27 +686,27 @@ const ErrorCodes = {
 
 ```bash
 # Start the hub daemon
-a2a-hub start [--foreground] [--http-port <port>] [--no-http]
+agents-hub start [--foreground] [--http-port <port>] [--no-http]
 
 # Stop the hub daemon
-a2a-hub stop
+agents-hub stop
 
 # Check hub status
-a2a-hub status
+agents-hub status
 
 # List registered agents
-a2a-hub agents [--health]
+agents-hub agents [--health]
 
 # Send a message to an agent
-a2a-hub send <agent-id> "<message>" [--context <id>] [--timeout <ms>] [--stream]
+agents-hub send <agent-id> "<message>" [--context <id>] [--timeout <ms>] [--stream]
 
 # List tasks
-a2a-hub tasks [--context <id>] [--state <state>] [--limit <n>]
+agents-hub tasks [--context <id>] [--state <state>] [--limit <n>]
 
 # Global options
-a2a-hub --socket <path>     # Unix socket path
-a2a-hub --format <type>     # Output format: json, pretty
-a2a-hub --verbose           # Enable debug logging
+agents-hub --socket <path>     # Unix socket path
+agents-hub --format <type>     # Output format: json, pretty
+agents-hub --verbose           # Enable debug logging
 ```
 
 ---
