@@ -125,3 +125,17 @@ type RuntimeCapabilities struct {
 	SupportedInputModes   []string
 	SupportedOutputModes  []string
 }
+
+// StreamEvent represents a real-time output event from an agent
+type StreamEvent struct {
+	Kind      string    `json:"kind"` // "output", "prompt", "complete", "error"
+	AgentID   string    `json:"agentId"`
+	TaskID    string    `json:"taskId"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// StreamingExecutor interface for agents that support streaming output
+type StreamingExecutor interface {
+	ExecuteStreaming(ctx ExecutionContext, output chan<- StreamEvent, input <-chan string) error
+}

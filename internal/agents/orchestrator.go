@@ -76,13 +76,17 @@ func (o *Orchestrator) Execute(ctx types.ExecutionContext) (types.ExecutionResul
 	for i, part := range parts {
 		delegates := o.Delegates()
 		agentID := delegates[i%len(delegates)]
+		metadata := map[string]any{"targetAgent": agentID}
+		if strings.TrimSpace(ctx.WorkingDir) != "" {
+			metadata["workingDirectory"] = ctx.WorkingDir
+		}
 		msg := types.Message{
 			Kind:      "message",
 			MessageID: utils.NewID("msg"),
 			Role:      "user",
 			Parts:     []types.Part{{Kind: "text", Text: strings.TrimSpace(part)}},
 			ContextID: ctx.ContextID,
-			Metadata:  map[string]any{"targetAgent": agentID},
+			Metadata:  metadata,
 		}
 		params, _ := json.Marshal(map[string]any{
 			"message": msg,

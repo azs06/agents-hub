@@ -65,6 +65,7 @@ func runStart(args []string) int {
 	socketPath := fs.String("socket", "/tmp/a2a-hub.sock", "unix socket path")
 	verbose := fs.Bool("verbose", false, "debug logging")
 	orchestratorAgents := fs.String("orchestrator-agents", "", "comma-separated agent IDs for orchestrator")
+	orchestratorRouter := fs.String("orchestrator-router", "", "agent ID for LLM orchestrator routing")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -75,11 +76,13 @@ func runStart(args []string) int {
 	cfg.HTTP.Port = *httpPort
 	cfg.HTTP.Enabled = !*noHTTP
 	cfg.Orchestrator.Agents = resolveOrchestratorAgents(*orchestratorAgents)
+	cfg.Orchestrator.RouterAgent = resolveOrchestratorRouter(*orchestratorRouter)
 	if *verbose {
 		cfg.Logging.Level = "debug"
 	}
 
 	logger := utils.NewLogger(cfg.Logging.Level)
+	setHubEnv(cfg)
 	server := hub.NewServer(cfg, logger)
 	server.RegisterHandlers()
 	baseURL := fmt.Sprintf("http://%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)
@@ -193,15 +196,18 @@ func runSend(args []string) int {
 	messageText := fs.Arg(1)
 
 	msg := types.Message{
-		Kind: "message",
+		Kind:      "message",
 		MessageID: "msg-" + fmt.Sprint(time.Now().UnixNano()),
-		Role: "user",
-		Parts: []types.Part{{Kind: "text", Text: messageText}},
+		Role:      "user",
+		Parts:     []types.Part{{Kind: "text", Text: messageText}},
 		ContextID: *contextID,
-		Metadata: map[string]any{"targetAgent": agentID},
+		Metadata:  map[string]any{"targetAgent": agentID},
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		msg.Metadata["workingDirectory"] = cwd
 	}
 	params, _ := json.Marshal(map[string]any{
-		"message": msg,
+		"message":       msg,
 		"configuration": map[string]any{"historyLength": 10, "timeout": *timeoutMs},
 	})
 	resp, err := sendRPCUnix(*socketPath, jsonrpc.Request{JSONRPC: "2.0", Method: "message/send", Params: params, ID: "1"})
@@ -303,4 +309,14 @@ func resolveOrchestratorAgents(flagValue string) []string {
 		out = append(out, val)
 	}
 	return out
+}
+
+func resolveOrchestratorRouter(flagValue string) string {
+	if flagValue == "" {
+		flagValue = os.Getenv("ORCHESTRATOR_ROUTER")
+	}
+	if strings.EqualFold(flagValue, "none") {
+		return ""
+	}
+	return strings.TrimSpace(flagValue)
 }

@@ -11,7 +11,8 @@ type Config struct {
 		Port    int
 	}
 	Orchestrator struct {
-		Agents []string
+		Agents      []string
+		RouterAgent string
 	}
 	Logging struct {
 		Level  string
@@ -28,6 +29,7 @@ func DefaultConfig() Config {
 	cfg.HTTP.Host = "127.0.0.1"
 	cfg.HTTP.Port = 8080
 	cfg.Orchestrator.Agents = []string{"claude-code", "gemini", "codex", "vibe"}
+	cfg.Orchestrator.RouterAgent = ""
 	cfg.Logging.Level = "info"
 	cfg.Logging.Pretty = false
 	cfg.DataDir = ""

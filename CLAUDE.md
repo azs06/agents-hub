@@ -50,13 +50,15 @@ This is a Go implementation of an A2A (Agent-to-Agent) Local Hub that enables CL
 
 **CLI Agent** (`internal/agents/cli_agent.go`): Generic wrapper for CLI-based agents. Spawns external processes, captures output, handles timeouts. Used by Claude, Gemini, Codex, and Vibe agents.
 
-**Orchestrator** (`internal/agents/orchestrator.go`): Special agent that delegates tasks to other agents. Splits prompts and distributes work across configured delegate agents.
+**Orchestrator** (`internal/agents/orchestrator.go`): Special agent that delegates tasks to other agents. Splits prompts by newlines, semicolons, or " and " and distributes work across configured delegate agents in round-robin fashion.
 
 **Transport Layer**:
 - `internal/transport/unix.go`: Unix domain socket (NDJSON) - primary transport at `/tmp/a2a-hub.sock`
 - `internal/transport/http.go`: HTTP server with JSON-RPC endpoint, health check, agent cards, and SSE streaming
 
 **JSON-RPC Handler** (`internal/jsonrpc/handler.go`): Dispatches JSON-RPC 2.0 requests to registered method handlers.
+
+**TUI** (`internal/tui/app.go`): Bubble Tea-based terminal UI with tabs for Status, Agents, Tasks, Send, History, and Settings. Uses command palette (`/` or `esc`) for navigation.
 
 ### Data Flow
 
@@ -66,6 +68,18 @@ This is a Go implementation of an A2A (Agent-to-Agent) Local Hub that enables CL
 4. Agent wrapper spawns CLI process with prompt
 5. Output is captured and returned as task result
 6. Task state transitions: submitted -> working -> completed/failed
+
+### JSON-RPC Methods
+
+- `hub/status`: Get hub version, uptime, agent counts, task stats
+- `hub/agents/list`: List registered agents (with optional health info)
+- `hub/agents/get`: Get single agent by ID
+- `hub/agents/health`: Get agent health status
+- `hub/tasks/list`: List tasks (filterable by contextId, state, limit, offset)
+- `hub/contexts/list`: List conversation contexts
+- `message/send`: Send message to agent, returns completed task
+- `tasks/get`: Get task by ID
+- `tasks/cancel`: Cancel a running task
 
 ### Key Types (`internal/types/a2a.go`)
 

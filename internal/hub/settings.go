@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"a2a-go/internal/types"
 	"a2a-go/internal/utils"
 )
 
 type Settings struct {
-	OrchestratorAgents []string `json:"orchestratorAgents"`
-	LastAgent          string   `json:"lastAgent"`
+	OrchestratorAgents []string             `json:"orchestratorAgents"`
+	LastAgent          string               `json:"lastAgent"`
+	Claude             types.ClaudeSettings `json:"claude,omitempty"`
+	Codex              types.CodexSettings  `json:"codex,omitempty"`
 }
 
 func (s *Server) SettingsPath() string {
@@ -74,4 +77,114 @@ func (s *Server) UpdateLastAgent(id string) {
 
 func (s *Server) LastAgent() string {
 	return s.settings.LastAgent
+}
+
+// ClaudeSettings returns the current Claude configuration
+func (s *Server) ClaudeSettings() types.ClaudeSettings {
+	return s.settings.Claude
+}
+
+// UpdateClaudeSettings updates Claude configuration and persists it
+func (s *Server) UpdateClaudeSettings(settings types.ClaudeSettings) error {
+	s.settings.Claude = settings
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateClaudeModel updates the default Claude model
+func (s *Server) UpdateClaudeModel(model string) error {
+	s.settings.Claude.DefaultModel = model
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateClaudeToolProfile updates the default tool profile
+func (s *Server) UpdateClaudeToolProfile(profile string) error {
+	s.settings.Claude.DefaultToolProfile = profile
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateClaudeContinue updates the continue mode setting
+func (s *Server) UpdateClaudeContinue(enabled bool) error {
+	s.settings.Claude.EnableContinue = enabled
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// GetClaudeConfig builds a ClaudeConfig from current settings
+func (s *Server) GetClaudeConfig() types.ClaudeConfig {
+	return types.ClaudeConfig{
+		Continue:     s.settings.Claude.EnableContinue,
+		Model:        types.ClaudeModel(s.settings.Claude.DefaultModel),
+		ToolProfile:  types.ClaudeToolProfile(s.settings.Claude.DefaultToolProfile),
+		AllowedTools: s.settings.Claude.CustomAllowedTools,
+	}
+}
+
+// CodexSettings returns the current Codex configuration.
+func (s *Server) CodexSettings() types.CodexSettings {
+	return s.settings.Codex
+}
+
+// UpdateCodexSettings updates Codex configuration and persists it.
+func (s *Server) UpdateCodexSettings(settings types.CodexSettings) error {
+	s.settings.Codex = settings
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateCodexModel updates the default Codex model.
+func (s *Server) UpdateCodexModel(model string) error {
+	s.settings.Codex.DefaultModel = model
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateCodexProfile updates the default Codex profile.
+func (s *Server) UpdateCodexProfile(profile string) error {
+	s.settings.Codex.DefaultProfile = profile
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateCodexSandbox updates the default Codex sandbox mode.
+func (s *Server) UpdateCodexSandbox(mode string) error {
+	s.settings.Codex.DefaultSandbox = mode
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateCodexApprovalPolicy updates the default Codex approval policy.
+func (s *Server) UpdateCodexApprovalPolicy(policy string) error {
+	s.settings.Codex.DefaultApprovalPolicy = policy
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateCodexSearch updates Codex search toggle.
+func (s *Server) UpdateCodexSearch(enabled bool) error {
+	s.settings.Codex.EnableSearch = enabled
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// GetCodexConfig builds a CodexConfig from current settings.
+func (s *Server) GetCodexConfig() types.CodexConfig {
+	return types.CodexConfig{
+		Model:           s.settings.Codex.DefaultModel,
+		Profile:         s.settings.Codex.DefaultProfile,
+		SandboxMode:     types.CodexSandboxMode(s.settings.Codex.DefaultSandbox),
+		ApprovalPolicy:  types.CodexApprovalPolicy(s.settings.Codex.DefaultApprovalPolicy),
+		Search:          s.settings.Codex.EnableSearch,
+		FullAuto:        s.settings.Codex.FullAuto,
+		BypassApprovals: s.settings.Codex.BypassApprovals,
+		WorkingDir:      s.settings.Codex.DefaultWorkingDir,
+		SystemPrompt:    s.settings.Codex.DefaultSystemPrompt,
+		AddDirs:         append([]string{}, s.settings.Codex.DefaultAddDirs...),
+		ConfigOverrides: append([]string{}, s.settings.Codex.ConfigOverrides...),
+		EnableFeatures:  append([]string{}, s.settings.Codex.EnableFeatures...),
+		DisableFeatures: append([]string{}, s.settings.Codex.DisableFeatures...),
+		IncludeHistory:  s.settings.Codex.IncludeHistory,
+	}
 }

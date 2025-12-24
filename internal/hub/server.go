@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"a2a-go/internal/agents"
@@ -54,13 +55,18 @@ func (s *Server) InitAgents(baseURL string) error {
 		agents.NewVibeAgent(baseURL),
 	}
 	if len(s.cfg.Orchestrator.Agents) > 0 {
-		agentsList = append([]agents.Agent{agents.NewOrchestrator(caller, baseURL, s.cfg.Orchestrator.Agents)}, agentsList...)
+		orchestratorAgent := agents.Agent(agents.NewOrchestrator(caller, baseURL, s.cfg.Orchestrator.Agents))
+		if strings.TrimSpace(s.cfg.Orchestrator.RouterAgent) != "" {
+			orchestratorAgent = agents.NewLLMOrchestrator(caller, baseURL, s.cfg.Orchestrator.Agents, s.cfg.Orchestrator.RouterAgent)
+		}
+		agentsList = append([]agents.Agent{orchestratorAgent}, agentsList...)
 	}
 	for _, agent := range agentsList {
 		if err := s.registry.Register(agent); err != nil {
 			s.logger.Warnf("failed to register %s: %v", agent.ID(), err)
 		}
 	}
+	s.applySettingsToAgents()
 	return nil
 }
 
@@ -99,6 +105,7 @@ func (s *Server) LoadState() error {
 	if err := s.LoadSettings(); err != nil {
 		return err
 	}
+	s.applySettingsToAgents()
 	if err := s.contexts.Load(); err != nil {
 		return err
 	}
@@ -106,6 +113,35 @@ func (s *Server) LoadState() error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) applySettingsToAgents() {
+	if info, ok := s.registry.Get("claude-code"); ok {
+		if setter, ok := info.Agent.(interface{ SetDefaultConfig(types.ClaudeConfig) }); ok {
+			setter.SetDefaultConfig(s.GetClaudeConfig())
+		}
+	}
+	if info, ok := s.registry.Get("codex"); ok {
+		if setter, ok := info.Agent.(interface{ SetDefaultConfig(types.CodexConfig) }); ok {
+			setter.SetDefaultConfig(s.GetCodexConfig())
+		}
+	}
+}
+
+func extractWorkingDir(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	if dir, ok := metadata["workingDirectory"].(string); ok && strings.TrimSpace(dir) != "" {
+		return dir
+	}
+	if dir, ok := metadata["workingDir"].(string); ok && strings.TrimSpace(dir) != "" {
+		return dir
+	}
+	if dir, ok := metadata["cwd"].(string); ok && strings.TrimSpace(dir) != "" {
+		return dir
+	}
+	return ""
 }
 
 func (s *Server) Config() Config {
@@ -265,8 +301,9 @@ func (s *Server) handleMessageSend(ctx context.Context, params json.RawMessage) 
 	var req struct {
 		Message       types.Message `json:"message"`
 		Configuration struct {
-			HistoryLength int `json:"historyLength"`
-			TimeoutMs     int `json:"timeout"`
+			HistoryLength int    `json:"historyLength"`
+			TimeoutMs     int    `json:"timeout"`
+			WorkingDir    string `json:"workingDirectory"`
 		} `json:"configuration"`
 	}
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -304,11 +341,17 @@ func (s *Server) handleMessageSend(ctx context.Context, params json.RawMessage) 
 	s.tasks.Create(task)
 	_ = s.tasks.UpdateStatus(taskID, types.TaskStateWorking, nil)
 
+	workingDir := strings.TrimSpace(req.Configuration.WorkingDir)
+	if workingDir == "" {
+		workingDir = extractWorkingDir(req.Message.Metadata)
+	}
+
 	result, err := info.Agent.Execute(types.ExecutionContext{
 		TaskID:      taskID,
 		ContextID:   contextID,
 		UserMessage: req.Message,
 		Timeout:     time.Duration(req.Configuration.TimeoutMs) * time.Millisecond,
+		WorkingDir:  workingDir,
 	})
 	if err != nil {
 		_ = s.tasks.UpdateStatus(taskID, types.TaskStateFailed, &types.Message{Kind: "message", MessageID: "error-" + taskID, Role: "agent", Parts: []types.Part{{Kind: "text", Text: err.Error()}}, TaskID: taskID, ContextID: contextID})

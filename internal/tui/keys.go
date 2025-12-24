@@ -14,16 +14,17 @@ type keyMap struct {
 	Search  key.Binding
 	Logs    key.Binding
 	Send    key.Binding
+	Screen  key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Command, k.Search, k.Send, k.Refresh, k.Logs, k.Help, k.Quit}
+	return []key.Binding{k.Command, k.Search, k.Send, k.Refresh, k.Logs, k.Screen, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down},
-		{k.Command, k.Search, k.Send, k.Refresh, k.Logs, k.Help, k.Quit},
+		{k.Command, k.Search, k.Send, k.Refresh, k.Logs, k.Screen, k.Help, k.Quit},
 	}
 }
 
@@ -71,5 +72,9 @@ var defaultKeyMap = keyMap{
 	Send: key.NewBinding(
 		key.WithKeys("s"),
 		key.WithHelp("s", "send"),
+	),
+	Screen: key.NewBinding(
+		key.WithKeys("ctrl+g"),
+		key.WithHelp("ctrl+g", "screen"),
 	),
 }

@@ -18,6 +18,7 @@ func runTUI(args []string) int {
 	noSocket := fs.Bool("no-socket", false, "disable unix socket")
 	verbose := fs.Bool("verbose", false, "debug logging")
 	orchestratorAgents := fs.String("orchestrator-agents", "", "comma-separated agent IDs for orchestrator")
+	orchestratorRouter := fs.String("orchestrator-router", "", "agent ID for LLM orchestrator routing")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -28,11 +29,13 @@ func runTUI(args []string) int {
 	cfg.HTTP.Port = *httpPort
 	cfg.HTTP.Enabled = !*noHTTP
 	cfg.Orchestrator.Agents = resolveOrchestratorAgents(*orchestratorAgents)
+	cfg.Orchestrator.RouterAgent = resolveOrchestratorRouter(*orchestratorRouter)
 	if *verbose {
 		cfg.Logging.Level = "debug"
 	}
 
 	logger := utils.NewLogger(cfg.Logging.Level)
+	setHubEnv(cfg)
 	if err := tui.Run(cfg, logger); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1

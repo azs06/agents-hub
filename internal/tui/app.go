@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,13 +37,28 @@ const (
 	tabCount
 )
 
+const (
+	settingsFieldOrchestrator = iota
+	settingsFieldClaudeModel
+	settingsFieldClaudeTools
+	settingsFieldClaudeContinue
+	settingsFieldCodexModel
+	settingsFieldCodexProfile
+	settingsFieldCodexSandbox
+	settingsFieldCodexApproval
+	settingsFieldCodexSearch
+	settingsFieldCount
+)
+
 var (
-	headerStyle  = lipgloss.NewStyle().Bold(true)
-	footerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	logStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	confirmStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	headerStyle     = lipgloss.NewStyle().Bold(true)
+	footerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	errStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
+	dimStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	logStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	confirmStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	inputBackground = lipgloss.AdaptiveColor{Light: "252", Dark: "236"}
+	msgBoxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Background(inputBackground)
 )
 
 type statusData struct {
@@ -64,12 +82,13 @@ type agentData struct {
 }
 
 type model struct {
-	cfg    hub.Config
-	logger *utils.Logger
-	caller *hub.LocalCaller
-	server *hub.Server
-	ctx    context.Context
-	cancel context.CancelFunc
+	cfg          hub.Config
+	logger       *utils.Logger
+	caller       *hub.LocalCaller
+	server       *hub.Server
+	ctx          context.Context
+	cancel       context.CancelFunc
+	sessionStart time.Time
 
 	width     int
 	height    int
@@ -80,7 +99,8 @@ type model struct {
 	tasks         []types.Task
 	responses     []responseEntry
 	sendLog       []sendEntry
-	sendLogOffset int
+	sendViewport  viewport.Model
+	sendLogSeeded bool
 
 	agentInput      textinput.Model
 	msgInput        textarea.Model
@@ -102,6 +122,7 @@ type model struct {
 	refreshing      bool
 	pendingRefresh  int
 	showLogs        bool
+	altScreen       bool
 	logs            []logEntry
 	logViewport     viewport.Model
 	logLines        []string
@@ -112,13 +133,44 @@ type model struct {
 	detailContent   string
 	settingsInput   textinput.Model
 	settingsMessage string
-	confirmQuit     bool
-	confirmMessage  string
+
+	// Claude settings
+	claudeModelInput   textinput.Model
+	claudeToolsInput   textinput.Model
+	claudeContinue     bool
+	settingsFocusIndex int
+
+	// Codex settings
+	codexModelInput    textinput.Model
+	codexProfileInput  textinput.Model
+	codexSandboxInput  textinput.Model
+	codexApprovalInput textinput.Model
+	codexSearch        bool
+
+	confirmQuit    bool
+	confirmMessage string
 
 	lastUpdated  time.Time
 	errMsg       string
 	sending      bool
 	lastResponse string
+
+	// Multi-agent support
+	activeAgents  map[string]string // agentID -> task text (currently running)
+	agentProgress map[string]string // agentID -> "working"/"completed"/"failed"
+
+	// Streaming support
+	streamChannels map[string]*AgentStream // agentID -> stream channels
+	streamBuffer   map[string][]string     // agentID -> buffered output lines
+	focusedAgent   string                  // Which agent has input focus
+	pendingPrompts []string                // Queue of agents waiting for input
+}
+
+// AgentStream holds the channels for streaming communication with an agent
+type AgentStream struct {
+	Output chan types.StreamEvent
+	Input  chan string
+	Done   bool
 }
 
 type sendEntry struct {
@@ -142,6 +194,19 @@ type errMsg struct {
 type sentMsg struct{ text string }
 type sendResultMsg struct{ entry responseEntry }
 type refreshStartMsg struct{ count int }
+
+// agentResultMsg is sent when an individual agent completes (for multi-agent dispatch)
+type agentResultMsg struct {
+	agentID string
+	text    string
+	err     error
+}
+
+// streamEventMsg wraps a streaming event from an agent
+type streamEventMsg struct {
+	agentID string
+	event   types.StreamEvent
+}
 
 type tickMsg time.Time
 
@@ -190,6 +255,10 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	msgInput.Focus()
 	msgInput.Prompt = ""
 	msgInput.ShowLineNumbers = false
+	msgInput.FocusedStyle.Base = msgInput.FocusedStyle.Base.Background(inputBackground)
+	msgInput.BlurredStyle.Base = msgInput.BlurredStyle.Base.Background(inputBackground)
+	msgInput.FocusedStyle.CursorLine = msgInput.FocusedStyle.CursorLine.Background(inputBackground)
+	msgInput.BlurredStyle.CursorLine = msgInput.BlurredStyle.CursorLine.Background(inputBackground)
 	commandInput := textinput.New()
 	commandInput.Placeholder = "command"
 	commandInput.Prompt = "/ "
@@ -199,42 +268,95 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	settingsInput := textinput.New()
 	settingsInput.Placeholder = "orchestrator agents (comma-separated)"
 	settingsInput.SetValue(strings.Join(orchestratorList, ","))
+
+	// Claude settings inputs
+	claudeSettings := server.ClaudeSettings()
+	claudeModelInput := textinput.New()
+	claudeModelInput.Placeholder = "opus, sonnet, haiku (blank for default)"
+	claudeModelInput.SetValue(claudeSettings.DefaultModel)
+	claudeModelInput.Width = 40
+
+	claudeToolsInput := textinput.New()
+	claudeToolsInput.Placeholder = "safe, normal, full (blank for default)"
+	claudeToolsInput.SetValue(claudeSettings.DefaultToolProfile)
+	claudeToolsInput.Width = 40
+
+	// Codex settings inputs
+	codexSettings := server.CodexSettings()
+	codexModelInput := textinput.New()
+	codexModelInput.Placeholder = "model (blank for default)"
+	codexModelInput.SetValue(codexSettings.DefaultModel)
+	codexModelInput.Width = 40
+
+	codexProfileInput := textinput.New()
+	codexProfileInput.Placeholder = "profile (blank for default)"
+	codexProfileInput.SetValue(codexSettings.DefaultProfile)
+	codexProfileInput.Width = 40
+
+	codexSandboxInput := textinput.New()
+	codexSandboxInput.Placeholder = "read-only, workspace-write, danger-full-access"
+	codexSandboxInput.SetValue(codexSettings.DefaultSandbox)
+	codexSandboxInput.Width = 40
+
+	codexApprovalInput := textinput.New()
+	codexApprovalInput.Placeholder = "untrusted, on-failure, on-request, never"
+	codexApprovalInput.SetValue(codexSettings.DefaultApprovalPolicy)
+	codexApprovalInput.Width = 40
+
 	agentsList := newListModel()
 	tasksList := newListModel()
 	responsesList := newListModel()
 	detailViewport := viewport.New(0, 0)
 	logViewport := viewport.New(0, 6)
+	sendViewport := viewport.New(0, 0)
 
 	m := model{
-		cfg:             cfg,
-		logger:          logger,
-		caller:          caller,
-		server:          server,
-		ctx:             ctx,
-		cancel:          cancel,
-		activeTab:       tabSend,
-		agentInput:      agentInput,
-		msgInput:        msgInput,
-		commandInput:    commandInput,
-		focusIndex:      1,
-		agentsList:      agentsList,
-		tasksList:       tasksList,
-		responsesList:   responsesList,
-		detailViewport:  detailViewport,
-		keys:            defaultKeyMap,
-		help:            help.New(),
-		commandHistory:  []string{},
-		historyIndex:    0,
-		commandIndex:    0,
-		spinner:         spin,
-		showLogs:        false,
-		logs:            []logEntry{},
-		logViewport:     logViewport,
-		logLines:        []string{},
-		sendLog:         []sendEntry{},
-		settingsInput:   settingsInput,
-		settingsMessage: "",
-		showSendModal:   true,
+		cfg:                cfg,
+		logger:             logger,
+		caller:             caller,
+		server:             server,
+		ctx:                ctx,
+		cancel:             cancel,
+		sessionStart:       time.Now().UTC(),
+		activeTab:          tabSend,
+		agentInput:         agentInput,
+		msgInput:           msgInput,
+		commandInput:       commandInput,
+		focusIndex:         1,
+		agentsList:         agentsList,
+		tasksList:          tasksList,
+		responsesList:      responsesList,
+		detailViewport:     detailViewport,
+		keys:               defaultKeyMap,
+		help:               help.New(),
+		commandHistory:     []string{},
+		historyIndex:       0,
+		commandIndex:       0,
+		spinner:            spin,
+		showLogs:           false,
+		altScreen:          true,
+		logs:               []logEntry{},
+		logViewport:        logViewport,
+		logLines:           []string{},
+		sendLog:            []sendEntry{},
+		sendViewport:       sendViewport,
+		settingsInput:      settingsInput,
+		settingsMessage:    "",
+		claudeModelInput:   claudeModelInput,
+		claudeToolsInput:   claudeToolsInput,
+		claudeContinue:     claudeSettings.EnableContinue,
+		codexModelInput:    codexModelInput,
+		codexProfileInput:  codexProfileInput,
+		codexSandboxInput:  codexSandboxInput,
+		codexApprovalInput: codexApprovalInput,
+		codexSearch:        codexSettings.EnableSearch,
+		settingsFocusIndex: 0,
+		showSendModal:      true,
+		activeAgents:       make(map[string]string),
+		agentProgress:      make(map[string]string),
+		streamChannels:     make(map[string]*AgentStream),
+		streamBuffer:       make(map[string][]string),
+		pendingPrompts:     []string{},
 	}
 	m.updateMessagePrompt()
 
@@ -255,6 +377,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.syncSendViewport()
 	case statusMsg:
 		m.status = msg.data
 		m.lastUpdated = time.Now()
@@ -271,9 +394,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasksList.SetItems(buildTaskItems(m.tasks))
 		m.finishRefresh()
 		m.updateDetailForTab(tabTasks)
+		m.seedSendLogFromTasks()
 	case errMsg:
 		m.errMsg = msg.err.Error()
 		m.sending = false
+		m.syncSendViewport()
 		m.addLog("error", msg.err.Error())
 		if msg.source == "send" {
 			m.appendSendEntry("error", "", msg.err.Error())
@@ -289,13 +414,70 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendSendEntry("agent", "", msg.text)
 	case sendResultMsg:
 		m.lastResponse = msg.entry.Text
+		m.sending = false
 		m.appendSendEntry("agent", msg.entry.Agent, msg.entry.Text)
 		m.responses = append([]responseEntry{msg.entry}, m.responses...)
 		m.responsesList.SetItems(buildResponseItems(m.responses))
-		m.sending = false
 		m.addLog("info", "response received from "+msg.entry.Agent)
 		m.updateDetailForTab(tabHistory)
 		return m, refreshAllCmd(m.caller)
+	case agentResultMsg:
+		// Handle individual agent result from multi-agent dispatch (non-streaming fallback)
+		if msg.err != nil {
+			m.appendSendEntry("error", msg.agentID, msg.err.Error())
+			m.agentProgress[msg.agentID] = "failed"
+			m.addLog("error", msg.agentID+": "+msg.err.Error())
+		} else {
+			m.appendSendEntry("agent", msg.agentID, msg.text)
+			m.agentProgress[msg.agentID] = "completed"
+			m.addLog("info", "response received from "+msg.agentID)
+		}
+		delete(m.activeAgents, msg.agentID)
+
+		// Check if all agents are done
+		if len(m.activeAgents) == 0 {
+			m.sending = false
+		}
+		m.syncSendViewport()
+		return m, nil
+	case streamEventMsg:
+		// Handle streaming events from agents
+		event := msg.event
+		switch event.Kind {
+		case "output":
+			m.appendStreamLine(msg.agentID, event.Text)
+			m.syncSendViewport()
+			m.sendViewport.GotoBottom() // Auto-scroll
+		case "prompt":
+			// Focus mode: first agent to ask gets focus
+			if m.focusedAgent == "" {
+				m.focusedAgent = msg.agentID
+			} else if m.focusedAgent != msg.agentID {
+				// Queue other agents waiting for input
+				m.pendingPrompts = append(m.pendingPrompts, msg.agentID)
+			}
+			m.appendStreamLine(msg.agentID, event.Text)
+			m.updateFocusIndicator()
+			m.syncSendViewport()
+			m.sendViewport.GotoBottom()
+		case "complete":
+			m.finishAgentStream(msg.agentID)
+			// If this was focused agent, move to next in queue
+			if m.focusedAgent == msg.agentID && len(m.pendingPrompts) > 0 {
+				m.focusedAgent = m.pendingPrompts[0]
+				m.pendingPrompts = m.pendingPrompts[1:]
+				m.updateFocusIndicator()
+			} else if m.focusedAgent == msg.agentID {
+				m.focusedAgent = ""
+				m.updateFocusIndicator()
+			}
+			m.syncSendViewport()
+		case "error":
+			m.appendSendEntry("error", msg.agentID, event.Text)
+			m.finishAgentStream(msg.agentID)
+			m.syncSendViewport()
+		}
+		return m, m.listenAllStreams()
 	case refreshStartMsg:
 		m.pendingRefresh += msg.count
 		m.refreshing = m.pendingRefresh > 0
@@ -304,11 +486,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		if m.refreshing || m.sending {
+			if m.sending {
+				m.syncSendViewport()
+			}
 			return m, cmd
 		}
 		return m, nil
 	case tickMsg:
 		return m, tea.Batch(refreshAllCmd(m.caller), tickCmd())
+	case tea.MouseMsg:
+		// Handle mouse wheel scrolling in viewports
+		if msg.Type == tea.MouseWheelUp || msg.Type == tea.MouseWheelDown {
+			if m.showSendModal || m.activeTab == tabSend {
+				var cmd tea.Cmd
+				m.sendViewport, cmd = m.sendViewport.Update(msg)
+				return m, cmd
+			}
+			if m.showLogs {
+				var cmd tea.Cmd
+				m.logViewport, cmd = m.logViewport.Update(msg)
+				return m, cmd
+			}
+			if m.activeTab == tabAgents || m.activeTab == tabTasks || m.activeTab == tabHistory {
+				var cmd tea.Cmd
+				m.detailViewport, cmd = m.detailViewport.Update(msg)
+				return m, cmd
+			}
+		}
 	case tea.KeyMsg:
 		if msg.String() == "esc" && !m.commandMode {
 			if m.confirmQuit {
@@ -325,6 +529,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showSendModal = false
 				m.msgInput.Blur()
 				m.agentInput.Blur()
+				m.syncSendViewport()
 			}
 			if m.activeTab == tabSettings {
 				m.setSettingsFocus(false)
@@ -349,6 +554,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if key.Matches(msg, m.keys.Screen) {
+			m.altScreen = !m.altScreen
+			if m.altScreen {
+				return m, tea.EnterAltScreen
+			}
+			return m, tea.ExitAltScreen
+		}
 		if m.showSendModal && !m.commandMode {
 			switch msg.String() {
 			case "ctrl+p":
@@ -362,8 +574,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showSendModal = false
 				m.msgInput.Blur()
 				m.agentInput.Blur()
+				m.syncSendViewport()
 				return m, nil
 			case "tab", "shift+tab":
+				// Focus mode: switch between agents waiting for input
+				if m.focusedAgent != "" && len(m.pendingPrompts) > 0 {
+					// Move current to end of queue, take next
+					m.pendingPrompts = append(m.pendingPrompts, m.focusedAgent)
+					m.focusedAgent = m.pendingPrompts[0]
+					m.pendingPrompts = m.pendingPrompts[1:]
+					m.updateFocusIndicator()
+					m.syncSendViewport()
+					return m, nil
+				}
+				// Normal tab behavior: switch between agent input and message input
 				if m.focusIndex == 0 {
 					m.server.UpdateLastAgent(m.agentInput.Value())
 					m.focusIndex = 1
@@ -377,13 +601,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "up", "down":
 				if m.focusIndex != 1 || strings.TrimSpace(m.msgInput.Value()) == "" {
-					m.scrollSendLog(msg.String())
-					return m, nil
+					return m, m.scrollSendViewport(msg)
 				}
 			case "pgup", "pgdown", "ctrl+u", "ctrl+d":
-				m.scrollSendLog(msg.String())
-				return m, nil
+				return m, m.scrollSendViewport(msg)
 			case "enter":
+				// Focus mode: send input to focused agent
+				if m.focusedAgent != "" {
+					text := m.msgInput.Value()
+					if text != "" {
+						if stream, ok := m.streamChannels[m.focusedAgent]; ok && !stream.Done {
+							stream.Input <- text
+						}
+						m.appendSendEntry("user-input", m.focusedAgent, text)
+						m.msgInput.SetValue("")
+						m.syncSendViewport()
+						m.sendViewport.GotoBottom()
+					}
+					return m, nil
+				}
+				// Normal mode: start new send
 				return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
 			case "/":
 				if m.focusIndex == 1 && strings.TrimSpace(m.msgInput.Value()) == "" {
@@ -418,6 +655,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusIndex = 1
 				m.agentInput.Blur()
 				m.msgInput.Focus()
+				m.syncSendViewport()
 				return m, nil
 			case "enter":
 				cmdText := strings.TrimSpace(m.commandInput.Value())
@@ -435,6 +673,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.focusIndex = 1
 					m.agentInput.Blur()
 					m.msgInput.Focus()
+					m.syncSendViewport()
 					return m, nil
 				}
 				m.appendCommandHistory(cmdText)
@@ -501,6 +740,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusIndex = 1
 				m.agentInput.Blur()
 				m.msgInput.Focus()
+				m.syncSendViewport()
 				return m, nil
 			}
 			if key.Matches(msg, m.keys.Search) && m.activeTab != tabSettings {
@@ -532,23 +772,148 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeTab == tabSettings {
 		if key, ok := msg.(tea.KeyMsg); ok {
 			switch key.String() {
+			case "tab":
+				// Move to next settings field
+				m.settingsFocusIndex = (m.settingsFocusIndex + 1) % settingsFieldCount
+				m.updateSettingsFieldFocus()
+				return m, nil
+			case "shift+tab":
+				// Move to previous settings field
+				m.settingsFocusIndex = (m.settingsFocusIndex + settingsFieldCount - 1) % settingsFieldCount
+				m.updateSettingsFieldFocus()
+				return m, nil
+			case " ":
+				// Toggle checkboxes if focused on them
+				if m.settingsFocusIndex == settingsFieldClaudeContinue {
+					m.claudeContinue = !m.claudeContinue
+					if err := m.server.UpdateClaudeContinue(m.claudeContinue); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Continue mode: %t", m.claudeContinue)
+					}
+					return m, nil
+				}
+				if m.settingsFocusIndex == settingsFieldCodexSearch {
+					m.codexSearch = !m.codexSearch
+					if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
+					}
+					return m, nil
+				}
 			case "enter":
-				agents := parseAgentList(m.settingsInput.Value())
-				label := strings.Join(agents, ",")
-				if label == "" {
-					label = "none"
+				switch m.settingsFocusIndex {
+				case settingsFieldOrchestrator:
+					agents := parseAgentList(m.settingsInput.Value())
+					label := strings.Join(agents, ",")
+					if label == "" {
+						label = "none"
+					}
+					if m.server.UpdateOrchestratorAgents(agents) {
+						m.settingsMessage = "Updated orchestrator delegates: " + label
+					} else {
+						m.settingsMessage = "Saved settings; restart to apply: " + label
+					}
+					m.settingsInput.SetValue(strings.Join(agents, ","))
+				case settingsFieldClaudeModel:
+					model := strings.TrimSpace(m.claudeModelInput.Value())
+					if err := m.server.UpdateClaudeModel(model); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if model == "" {
+						m.settingsMessage = "Claude model: default"
+					} else {
+						m.settingsMessage = "Claude model: " + model
+					}
+				case settingsFieldClaudeTools:
+					profile := strings.TrimSpace(m.claudeToolsInput.Value())
+					if err := m.server.UpdateClaudeToolProfile(profile); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if profile == "" {
+						m.settingsMessage = "Claude tools: all (default)"
+					} else {
+						m.settingsMessage = "Claude tools: " + profile
+					}
+				case settingsFieldClaudeContinue:
+					m.claudeContinue = !m.claudeContinue
+					if err := m.server.UpdateClaudeContinue(m.claudeContinue); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Continue mode: %t", m.claudeContinue)
+					}
+				case settingsFieldCodexModel:
+					model := strings.TrimSpace(m.codexModelInput.Value())
+					if err := m.server.UpdateCodexModel(model); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if model == "" {
+						m.settingsMessage = "Codex model: default"
+					} else {
+						m.settingsMessage = "Codex model: " + model
+					}
+				case settingsFieldCodexProfile:
+					profile := strings.TrimSpace(m.codexProfileInput.Value())
+					if err := m.server.UpdateCodexProfile(profile); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if profile == "" {
+						m.settingsMessage = "Codex profile: default"
+					} else {
+						m.settingsMessage = "Codex profile: " + profile
+					}
+				case settingsFieldCodexSandbox:
+					mode := strings.TrimSpace(m.codexSandboxInput.Value())
+					if mode != "" && mode != "read-only" && mode != "workspace-write" && mode != "danger-full-access" {
+						m.settingsMessage = "Invalid sandbox: use read-only, workspace-write, danger-full-access, or blank"
+						return m, nil
+					}
+					if err := m.server.UpdateCodexSandbox(mode); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if mode == "" {
+						m.settingsMessage = "Codex sandbox: default"
+					} else {
+						m.settingsMessage = "Codex sandbox: " + mode
+					}
+				case settingsFieldCodexApproval:
+					policy := strings.TrimSpace(m.codexApprovalInput.Value())
+					if policy != "" && policy != "untrusted" && policy != "on-failure" && policy != "on-request" && policy != "never" {
+						m.settingsMessage = "Invalid approval: use untrusted, on-failure, on-request, never, or blank"
+						return m, nil
+					}
+					if err := m.server.UpdateCodexApprovalPolicy(policy); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if policy == "" {
+						m.settingsMessage = "Codex approval: default"
+					} else {
+						m.settingsMessage = "Codex approval: " + policy
+					}
+				case settingsFieldCodexSearch:
+					m.codexSearch = !m.codexSearch
+					if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
+					}
 				}
-				if m.server.UpdateOrchestratorAgents(agents) {
-					m.settingsMessage = "Updated orchestrator delegates: " + label
-				} else {
-					m.settingsMessage = "Saved settings; restart to apply: " + label
-				}
-				m.settingsInput.SetValue(strings.Join(agents, ","))
 				return m, nil
 			}
 		}
+		// Update the focused input
 		var cmd tea.Cmd
-		m.settingsInput, cmd = m.settingsInput.Update(msg)
+		switch m.settingsFocusIndex {
+		case settingsFieldOrchestrator:
+			m.settingsInput, cmd = m.settingsInput.Update(msg)
+		case settingsFieldClaudeModel:
+			m.claudeModelInput, cmd = m.claudeModelInput.Update(msg)
+		case settingsFieldClaudeTools:
+			m.claudeToolsInput, cmd = m.claudeToolsInput.Update(msg)
+		case settingsFieldCodexModel:
+			m.codexModelInput, cmd = m.codexModelInput.Update(msg)
+		case settingsFieldCodexProfile:
+			m.codexProfileInput, cmd = m.codexProfileInput.Update(msg)
+		case settingsFieldCodexSandbox:
+			m.codexSandboxInput, cmd = m.codexSandboxInput.Update(msg)
+		case settingsFieldCodexApproval:
+			m.codexApprovalInput, cmd = m.codexApprovalInput.Update(msg)
+		}
 		return m, cmd
 	}
 
@@ -558,6 +923,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch key.String() {
 			case "ctrl+enter", "alt+enter", "ctrl+s":
 				return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
+			case "up", "down", "pgup", "pgdown", "ctrl+u", "ctrl+d":
+				if m.focusIndex != 1 || strings.TrimSpace(m.msgInput.Value()) == "" {
+					return m, m.scrollSendViewport(key)
+				}
 			case "enter":
 				if m.focusIndex == 0 {
 					m.server.UpdateLastAgent(m.agentInput.Value())
@@ -697,6 +1066,7 @@ func (m *model) applyCommand(input string) tea.Cmd {
 		m.agentInput.Blur()
 		m.msgInput.Focus()
 		m.setSettingsFocus(false)
+		m.syncSendViewport()
 		if len(parts) >= 3 {
 			agent := parts[1]
 			message := strings.Join(parts[2:], " ")
@@ -712,6 +1082,7 @@ func (m *model) applyCommand(input string) tea.Cmd {
 		m.agentInput.Blur()
 		m.msgInput.Focus()
 		m.setSettingsFocus(false)
+		m.syncSendViewport()
 		if len(parts) >= 2 {
 			m.agentInput.SetValue(parts[1])
 			m.server.UpdateLastAgent(parts[1])
@@ -723,6 +1094,7 @@ func (m *model) applyCommand(input string) tea.Cmd {
 			m.focusIndex = 1
 			m.agentInput.Blur()
 			m.msgInput.Focus()
+			m.syncSendViewport()
 		}
 		return refreshAllCmd(m.caller)
 	case "help":
@@ -730,6 +1102,128 @@ func (m *model) applyCommand(input string) tea.Cmd {
 		return nil
 	case "quit", "exit":
 		return tea.Quit
+	case "claude-model":
+		if len(parts) >= 2 {
+			model := strings.ToLower(parts[1])
+			if model != "opus" && model != "sonnet" && model != "haiku" && model != "" {
+				m.errMsg = "Invalid model. Use: opus, sonnet, haiku, or blank"
+				return nil
+			}
+			if err := m.server.UpdateClaudeModel(model); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if model == "" {
+				m.settingsMessage = "Claude model: default"
+			} else {
+				m.settingsMessage = "Claude model: " + model
+			}
+			m.claudeModelInput.SetValue(model)
+		} else {
+			m.errMsg = "Usage: /claude-model <opus|sonnet|haiku>"
+		}
+		return nil
+	case "claude-tools":
+		if len(parts) >= 2 {
+			profile := strings.ToLower(parts[1])
+			if profile != "safe" && profile != "normal" && profile != "full" && profile != "" {
+				m.errMsg = "Invalid profile. Use: safe, normal, full, or blank"
+				return nil
+			}
+			if err := m.server.UpdateClaudeToolProfile(profile); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if profile == "" {
+				m.settingsMessage = "Claude tools: all (default)"
+			} else {
+				m.settingsMessage = "Claude tools: " + profile
+			}
+			m.claudeToolsInput.SetValue(profile)
+		} else {
+			m.errMsg = "Usage: /claude-tools <safe|normal|full>"
+		}
+		return nil
+	case "claude-continue":
+		m.claudeContinue = !m.claudeContinue
+		if err := m.server.UpdateClaudeContinue(m.claudeContinue); err != nil {
+			m.errMsg = "Failed to save: " + err.Error()
+		} else {
+			m.settingsMessage = fmt.Sprintf("Claude continue mode: %t", m.claudeContinue)
+		}
+		return nil
+	case "codex-model":
+		if len(parts) >= 2 {
+			model := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if err := m.server.UpdateCodexModel(model); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if model == "" {
+				m.settingsMessage = "Codex model: default"
+			} else {
+				m.settingsMessage = "Codex model: " + model
+			}
+			m.codexModelInput.SetValue(model)
+		} else {
+			m.errMsg = "Usage: /codex-model <model>"
+		}
+		return nil
+	case "codex-profile":
+		if len(parts) >= 2 {
+			profile := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if err := m.server.UpdateCodexProfile(profile); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if profile == "" {
+				m.settingsMessage = "Codex profile: default"
+			} else {
+				m.settingsMessage = "Codex profile: " + profile
+			}
+			m.codexProfileInput.SetValue(profile)
+		} else {
+			m.errMsg = "Usage: /codex-profile <profile>"
+		}
+		return nil
+	case "codex-sandbox":
+		if len(parts) >= 2 {
+			mode := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if mode != "" && mode != "read-only" && mode != "workspace-write" && mode != "danger-full-access" {
+				m.errMsg = "Invalid sandbox. Use: read-only, workspace-write, danger-full-access, or blank"
+				return nil
+			}
+			if err := m.server.UpdateCodexSandbox(mode); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if mode == "" {
+				m.settingsMessage = "Codex sandbox: default"
+			} else {
+				m.settingsMessage = "Codex sandbox: " + mode
+			}
+			m.codexSandboxInput.SetValue(mode)
+		} else {
+			m.errMsg = "Usage: /codex-sandbox <read-only|workspace-write|danger-full-access>"
+		}
+		return nil
+	case "codex-approval":
+		if len(parts) >= 2 {
+			policy := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if policy != "" && policy != "untrusted" && policy != "on-failure" && policy != "on-request" && policy != "never" {
+				m.errMsg = "Invalid approval. Use: untrusted, on-failure, on-request, never, or blank"
+				return nil
+			}
+			if err := m.server.UpdateCodexApprovalPolicy(policy); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if policy == "" {
+				m.settingsMessage = "Codex approval: default"
+			} else {
+				m.settingsMessage = "Codex approval: " + policy
+			}
+			m.codexApprovalInput.SetValue(policy)
+		} else {
+			m.errMsg = "Usage: /codex-approval <untrusted|on-failure|on-request|never>"
+		}
+		return nil
+	case "codex-search":
+		m.codexSearch = !m.codexSearch
+		if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
+			m.errMsg = "Failed to save: " + err.Error()
+		} else {
+			m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
+		}
+		return nil
 	default:
 		m.errMsg = fmt.Sprintf("unknown command: %s", input)
 		m.addLog("warn", m.errMsg)
@@ -845,6 +1339,16 @@ var commandCatalog = []commandSpec{
 	{Name: "help", Usage: "/help", Description: "show help overlay"},
 	{Name: "quit", Usage: "/quit", Description: "exit the TUI"},
 	{Name: "q", Usage: "/q", Description: "exit the TUI"},
+	// Claude settings commands
+	{Name: "claude-model", Usage: "/claude-model <opus|sonnet|haiku>", Description: "set Claude model"},
+	{Name: "claude-tools", Usage: "/claude-tools <safe|normal|full>", Description: "set Claude tool profile"},
+	{Name: "claude-continue", Usage: "/claude-continue", Description: "toggle Claude continue mode"},
+	// Codex settings commands
+	{Name: "codex-model", Usage: "/codex-model <model>", Description: "set Codex model"},
+	{Name: "codex-profile", Usage: "/codex-profile <profile>", Description: "set Codex config profile"},
+	{Name: "codex-sandbox", Usage: "/codex-sandbox <mode>", Description: "set Codex sandbox mode"},
+	{Name: "codex-approval", Usage: "/codex-approval <policy>", Description: "set Codex approval policy"},
+	{Name: "codex-search", Usage: "/codex-search", Description: "toggle Codex web search"},
 }
 
 func (m *model) appendCommandHistory(cmd string) {
@@ -1076,37 +1580,24 @@ func (m model) viewTasks() string {
 
 func (m model) viewSend() string {
 	width, height := m.bodySize()
-	if width <= 0 {
-		width = 80
-	}
-	if width < 30 {
-		width = 30
-	}
-	if height <= 0 {
-		height = 24
-	}
-	m.agentInput.Width = width - 4
-	m.msgInput.SetWidth(width - 4)
-	msgHeight := 4
-	if height > 22 {
-		msgHeight = 5
-	}
+	inputWidth, msgHeight, logHeight, activityHeight := sendViewLayout(width, height)
+	m.agentInput.Width = inputWidth
+	// Account for border width when setting textarea dimensions
+	m.msgInput.SetWidth(inputWidth - 2)
 	m.msgInput.SetHeight(msgHeight)
-	availableHeight := height - 6
-	if availableHeight < 8 {
-		availableHeight = 8
-	}
-	logHeight := availableHeight - (4 + msgHeight)
-	if logHeight < 1 {
-		logHeight = 1
-	}
-	log := m.renderSendLog(width-4, logHeight)
+	log := m.renderSendLog(inputWidth, logHeight)
+	activity := m.renderTaskActivity(inputWidth, activityHeight)
+	separator := dimStyle.Render(strings.Repeat("─", inputWidth))
+	msgBox := msgBoxStyle.Width(inputWidth).Render(m.msgInput.View())
 	lines := []string{
 		"Agent:",
 		m.agentInput.View(),
 		log,
+		separator,
+		"Activity:",
+		activity,
 		"Message:",
-		m.msgInput.View(),
+		msgBox,
 		"enter to send, shift+enter for newline, up/down scroll log, esc to edit agent",
 	}
 	return strings.Join(lines, "\n")
@@ -1115,19 +1606,26 @@ func (m model) viewSend() string {
 func (m model) renderSendModal() string {
 	width, height := modalSize(m.width, m.height)
 
-	inputWidth, msgHeight, logHeight := sendModalLayout(width, height)
+	inputWidth, msgHeight, logHeight, activityHeight := sendModalLayout(width, height)
 	m.agentInput.Width = inputWidth
-	m.msgInput.SetWidth(inputWidth)
+	// Account for border width when setting textarea dimensions
+	m.msgInput.SetWidth(inputWidth - 2)
 	m.msgInput.SetHeight(msgHeight)
 	log := m.renderSendLog(inputWidth, logHeight)
+	activity := m.renderTaskActivity(inputWidth, activityHeight)
+	separator := dimStyle.Render(strings.Repeat("─", inputWidth))
+	msgBox := msgBoxStyle.Width(inputWidth).Render(m.msgInput.View())
 
 	title := headerStyle.Render("Send Message")
 	body := strings.Join([]string{
 		"Agent:",
 		m.agentInput.View(),
 		log,
+		separator,
+		"Activity:",
+		activity,
 		"Message:",
-		m.msgInput.View(),
+		msgBox,
 		"enter to send, shift+enter for newline, up/down scroll log, esc to close",
 	}, "\n")
 	box := lipgloss.NewStyle().
@@ -1173,38 +1671,76 @@ func panelSize(width, height int) (int, int) {
 	if width <= 0 || height <= 0 {
 		return width, height
 	}
-	padW := width / 10
-	padH := height / 10
-	if padW < 1 {
-		padW = 1
-	}
-	if padH < 1 {
-		padH = 1
-	}
-	if width-2*padW < 1 {
-		padW = 0
-	}
-	if height-2*padH < 1 {
-		padH = 0
-	}
-	return width - 2*padW, height - 2*padH
+	// Minimal padding: just 1 unit for border on each side
+	return width - 2, height - 2
 }
 
-func sendModalLayout(width, height int) (int, int, int) {
+func sendViewLayout(width, height int) (int, int, int, int) {
+	if width <= 0 {
+		width = 80
+	}
+	if width < 30 {
+		width = 30
+	}
+	if height <= 0 {
+		height = 24
+	}
+	inputWidth := width - 4
+	if inputWidth < 20 {
+		inputWidth = 20
+	}
+	msgHeight := 6
+	if height > 30 {
+		msgHeight = 8
+	}
+	availableHeight := height - (msgHeight + 6)
+	logHeight, activityHeight := splitSendHeights(availableHeight)
+	return inputWidth, msgHeight, logHeight, activityHeight
+}
+
+func sendModalLayout(width, height int) (int, int, int, int) {
 	inputWidth := width - 6
 	if inputWidth < 20 {
 		inputWidth = 20
 	}
-	msgHeight := 3
-	if height >= 16 {
-		msgHeight = 4
+	msgHeight := 5
+	if height >= 20 {
+		msgHeight = 6
 	}
 	contentHeight := height - 4
-	logHeight := contentHeight - (4 + msgHeight)
-	if logHeight < 1 {
-		logHeight = 1
+	availableHeight := contentHeight - (msgHeight + 6)
+	logHeight, activityHeight := splitSendHeights(availableHeight)
+	return inputWidth, msgHeight, logHeight, activityHeight
+}
+
+func splitSendHeights(available int) (int, int) {
+	if available < 2 {
+		available = 2
 	}
-	return inputWidth, msgHeight, logHeight
+	minLog := 3
+	minActivity := 2
+	if available < minLog+minActivity {
+		logHeight := available / 2
+		if logHeight < 1 {
+			logHeight = 1
+		}
+		activityHeight := available - logHeight
+		if activityHeight < 1 {
+			activityHeight = 1
+		}
+		return logHeight, activityHeight
+	}
+	// Give more space to log, less to activity
+	activityHeight := available / 4
+	if activityHeight < minActivity {
+		activityHeight = minActivity
+	}
+	logHeight := available - activityHeight
+	if logHeight < minLog {
+		logHeight = minLog
+		activityHeight = available - logHeight
+	}
+	return logHeight, activityHeight
 }
 
 func (m model) viewHistory() string {
@@ -1237,6 +1773,49 @@ func (m model) viewHistory() string {
 func (m model) viewSettings() string {
 	m.settingsInput.Width = 60
 	currentDelegates := strings.Join(m.server.OrchestratorAgents(), ",")
+
+	// Focus indicators
+	orchIndicator := "  "
+	modelIndicator := "  "
+	toolsIndicator := "  "
+	contIndicator := "  "
+	codexModelIndicator := "  "
+	codexProfileIndicator := "  "
+	codexSandboxIndicator := "  "
+	codexApprovalIndicator := "  "
+	codexSearchIndicator := "  "
+	switch m.settingsFocusIndex {
+	case settingsFieldOrchestrator:
+		orchIndicator = "> "
+	case settingsFieldClaudeModel:
+		modelIndicator = "> "
+	case settingsFieldClaudeTools:
+		toolsIndicator = "> "
+	case settingsFieldClaudeContinue:
+		contIndicator = "> "
+	case settingsFieldCodexModel:
+		codexModelIndicator = "> "
+	case settingsFieldCodexProfile:
+		codexProfileIndicator = "> "
+	case settingsFieldCodexSandbox:
+		codexSandboxIndicator = "> "
+	case settingsFieldCodexApproval:
+		codexApprovalIndicator = "> "
+	case settingsFieldCodexSearch:
+		codexSearchIndicator = "> "
+	}
+
+	// Continue mode checkbox
+	continueCheck := "[ ]"
+	if m.claudeContinue {
+		continueCheck = "[x]"
+	}
+
+	codexSearchCheck := "[ ]"
+	if m.codexSearch {
+		codexSearchCheck = "[x]"
+	}
+
 	lines := []string{
 		headerStyle.Render("Runtime Settings"),
 		"",
@@ -1244,10 +1823,38 @@ func (m model) viewSettings() string {
 		fmt.Sprintf("Socket: %s (enabled: %t)", m.server.Config().Socket.Path, m.server.Config().Socket.Enabled),
 		fmt.Sprintf("HTTP: %s:%d (enabled: %t)", m.server.Config().HTTP.Host, m.server.Config().HTTP.Port, m.server.Config().HTTP.Enabled),
 		"",
-		"Orchestrator delegates (comma-separated):",
-		m.settingsInput.View(),
-		fmt.Sprintf("Current delegates: %s", currentDelegates),
-		"Press enter to apply changes (use 'none' to disable)",
+		headerStyle.Render("Orchestrator"),
+		orchIndicator + "Delegates (comma-separated):",
+		"  " + m.settingsInput.View(),
+		fmt.Sprintf("  Current: %s", currentDelegates),
+		"",
+		headerStyle.Render("Claude Settings"),
+		modelIndicator + "Model:",
+		"  " + m.claudeModelInput.View(),
+		dimStyle.Render("  Options: opus, sonnet, haiku (blank = default)"),
+		toolsIndicator + "Tool Profile:",
+		"  " + m.claudeToolsInput.View(),
+		dimStyle.Render("  Options: safe (read-only), normal, full (blank = all tools)"),
+		contIndicator + "Continue Mode: " + continueCheck,
+		dimStyle.Render("  Resume previous conversation context"),
+		"",
+		headerStyle.Render("Codex Settings"),
+		codexModelIndicator + "Model:",
+		"  " + m.codexModelInput.View(),
+		dimStyle.Render("  Any model id (blank = default)"),
+		codexProfileIndicator + "Profile:",
+		"  " + m.codexProfileInput.View(),
+		dimStyle.Render("  Config profile from config.toml (blank = default)"),
+		codexSandboxIndicator + "Sandbox:",
+		"  " + m.codexSandboxInput.View(),
+		dimStyle.Render("  read-only, workspace-write, danger-full-access (blank = default)"),
+		codexApprovalIndicator + "Approval Policy:",
+		"  " + m.codexApprovalInput.View(),
+		dimStyle.Render("  untrusted, on-failure, on-request, never (blank = default)"),
+		codexSearchIndicator + "Web Search: " + codexSearchCheck,
+		dimStyle.Render("  Enable web_search tool"),
+		"",
+		dimStyle.Render("Tab/Shift+Tab to navigate, Enter to apply, Space to toggle"),
 	}
 	if m.settingsMessage != "" {
 		lines = append(lines, "", m.settingsMessage)
@@ -1403,6 +2010,7 @@ func (m *model) updateActiveList(msg tea.Msg) tea.Cmd {
 				m.focusIndex = 1
 				m.agentInput.Blur()
 				m.msgInput.Focus()
+				m.syncSendViewport()
 				return nil
 			}
 		}
@@ -1510,10 +2118,46 @@ func (m model) renderExecList() string {
 
 func (m *model) setSettingsFocus(active bool) {
 	if active {
-		m.settingsInput.Focus()
+		m.updateSettingsFieldFocus()
 		return
 	}
 	m.settingsInput.Blur()
+	m.claudeModelInput.Blur()
+	m.claudeToolsInput.Blur()
+	m.codexModelInput.Blur()
+	m.codexProfileInput.Blur()
+	m.codexSandboxInput.Blur()
+	m.codexApprovalInput.Blur()
+}
+
+func (m *model) updateSettingsFieldFocus() {
+	// Blur all fields first
+	m.settingsInput.Blur()
+	m.claudeModelInput.Blur()
+	m.claudeToolsInput.Blur()
+	m.codexModelInput.Blur()
+	m.codexProfileInput.Blur()
+	m.codexSandboxInput.Blur()
+	m.codexApprovalInput.Blur()
+
+	// Focus the selected field
+	switch m.settingsFocusIndex {
+	case settingsFieldOrchestrator:
+		m.settingsInput.Focus()
+	case settingsFieldClaudeModel:
+		m.claudeModelInput.Focus()
+	case settingsFieldClaudeTools:
+		m.claudeToolsInput.Focus()
+	case settingsFieldCodexModel:
+		m.codexModelInput.Focus()
+	case settingsFieldCodexProfile:
+		m.codexProfileInput.Focus()
+	case settingsFieldCodexSandbox:
+		m.codexSandboxInput.Focus()
+	case settingsFieldCodexApproval:
+		m.codexApprovalInput.Focus()
+		// checkbox fields don't get focus
+	}
 }
 
 func (m *model) updateMessagePrompt() {
@@ -1526,7 +2170,18 @@ func (m *model) updateMessagePrompt() {
 func (m *model) startSend(agent, message string) tea.Cmd {
 	agent = strings.TrimSpace(agent)
 	message = strings.TrimSpace(message)
-	if agent == "" || message == "" {
+	if message == "" {
+		return nil
+	}
+
+	// Check for @agent mentions in the message
+	mentions := parseMentions(message)
+	if len(mentions) > 0 {
+		return m.startMultiAgentSend(mentions)
+	}
+
+	// Single agent flow - use streaming
+	if agent == "" {
 		return nil
 	}
 	m.errMsg = ""
@@ -1536,7 +2191,69 @@ func (m *model) startSend(agent, message string) tea.Cmd {
 	m.appendSendEntry("user", agent, message)
 	m.msgInput.SetValue("")
 	m.msgInput.CursorEnd()
-	return tea.Batch(sendCmd(m.caller, agent, message), m.spinner.Tick)
+
+	// Clear previous streaming state
+	m.streamChannels = make(map[string]*AgentStream)
+	m.streamBuffer = make(map[string][]string)
+	m.focusedAgent = ""
+	m.pendingPrompts = []string{}
+
+	// Create stream channels for this agent
+	stream := &AgentStream{
+		Output: make(chan types.StreamEvent, 100),
+		Input:  make(chan string, 10),
+		Done:   false,
+	}
+	m.streamChannels[agent] = stream
+
+	// Start streaming execution in background
+	return tea.Batch(
+		m.spinner.Tick,
+		startStreamingCmd(m.server, agent, message, stream),
+		listenAgentStream(agent, stream.Output),
+	)
+}
+
+// startMultiAgentSend dispatches tasks to multiple agents concurrently with streaming
+func (m *model) startMultiAgentSend(mentions map[string]string) tea.Cmd {
+	m.errMsg = ""
+	m.lastResponse = ""
+	m.sending = true
+
+	// Clear and set up tracking
+	m.activeAgents = make(map[string]string)
+	m.agentProgress = make(map[string]string)
+	m.streamChannels = make(map[string]*AgentStream)
+	m.streamBuffer = make(map[string][]string)
+	m.focusedAgent = ""
+	m.pendingPrompts = []string{}
+
+	// Build list of agent names for display
+	var agentNames []string
+	for agentID, task := range mentions {
+		m.activeAgents[agentID] = task
+		m.agentProgress[agentID] = "working"
+		agentNames = append(agentNames, agentID)
+	}
+
+	// Append user message summary to log
+	m.appendSendEntry("user", strings.Join(agentNames, ", "), formatMentionsSummary(mentions))
+	m.msgInput.SetValue("")
+	m.msgInput.CursorEnd()
+
+	// Create batch of commands - one per agent with streaming
+	cmds := []tea.Cmd{m.spinner.Tick}
+	for agentID, task := range mentions {
+		stream := &AgentStream{
+			Output: make(chan types.StreamEvent, 100),
+			Input:  make(chan string, 10),
+			Done:   false,
+		}
+		m.streamChannels[agentID] = stream
+		cmds = append(cmds, startStreamingCmd(m.server, agentID, task, stream))
+		cmds = append(cmds, listenAgentStream(agentID, stream.Output))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) appendSendEntry(role, agent, text string) {
@@ -1550,43 +2267,135 @@ func (m *model) appendSendEntry(role, agent, text string) {
 		Text:      text,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
-	m.sendLogOffset = 0
+	m.syncSendViewport()
+}
+
+// appendStreamLine adds a line to an agent's streaming buffer and updates the display
+func (m *model) appendStreamLine(agentID, text string) {
+	if m.streamBuffer == nil {
+		m.streamBuffer = make(map[string][]string)
+	}
+	m.streamBuffer[agentID] = append(m.streamBuffer[agentID], text)
+}
+
+// finishAgentStream marks an agent's stream as done and consolidates output
+func (m *model) finishAgentStream(agentID string) {
+	if stream, ok := m.streamChannels[agentID]; ok {
+		stream.Done = true
+	}
+	// Consolidate buffer into a single send entry
+	if lines, ok := m.streamBuffer[agentID]; ok && len(lines) > 0 {
+		text := strings.Join(lines, "\n")
+		m.appendSendEntry("agent", agentID, text)
+		delete(m.streamBuffer, agentID)
+	}
+	delete(m.activeAgents, agentID)
+	m.agentProgress[agentID] = "completed"
+
+	// Check if all agents are done
+	allDone := true
+	for _, stream := range m.streamChannels {
+		if !stream.Done {
+			allDone = false
+			break
+		}
+	}
+	if allDone {
+		m.sending = false
+	}
+}
+
+// updateFocusIndicator updates the agent input to show which agent has focus
+func (m *model) updateFocusIndicator() {
+	if m.focusedAgent != "" {
+		m.agentInput.SetValue(m.focusedAgent + " (responding)")
+	} else if len(m.streamChannels) > 0 {
+		// Show the first active streaming agent
+		for agentID := range m.streamChannels {
+			m.agentInput.SetValue(agentID)
+			break
+		}
+	}
 }
 
 func (m model) renderSendLog(width, height int) string {
 	if height <= 0 {
 		return ""
 	}
+	return m.sendViewport.View()
+}
+
+func (m model) renderTaskActivity(width, height int) string {
+	if height <= 0 {
+		return ""
+	}
 	if width <= 0 {
 		width = 20
 	}
+	tasks := append([]types.Task{}, m.tasks...)
+	if len(tasks) == 0 {
+		return padLines([]string{dimStyle.Render("No tasks yet.")}, height)
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].Status.Timestamp > tasks[j].Status.Timestamp
+	})
 	wrapWidth := width - 2
 	if wrapWidth < 1 {
 		wrapWidth = width
 	}
-	lines := m.sendLogLines(wrapWidth)
-	if len(lines) == 0 {
-		lines = []string{dimStyle.Render("No messages yet.")}
+	lines := make([]string, 0, height)
+	for _, task := range tasks {
+		if len(lines) >= height {
+			break
+		}
+		agent := taskTargetAgent(task)
+		if agent == "" {
+			agent = "unknown"
+		}
+		label := fmt.Sprintf("%s  %s  %s", task.Status.State, agent, shortTaskID(task.ID))
+		wrapped := ansi.Wrap(label, wrapWidth, "")
+		for _, line := range strings.Split(wrapped, "\n") {
+			if len(lines) >= height {
+				break
+			}
+			lines = append(lines, line)
+		}
 	}
-	maxOffset := max(0, len(lines)-height)
-	offset := m.sendLogOffset
-	if offset > maxOffset {
-		offset = maxOffset
+	return padLines(lines, height)
+}
+
+func taskTargetAgent(task types.Task) string {
+	if task.Metadata != nil {
+		if value, ok := task.Metadata["targetAgent"].(string); ok && value != "" {
+			return value
+		}
 	}
-	start := len(lines) - height - offset
-	if start < 0 {
-		start = 0
+	for _, msg := range task.History {
+		if msg.Metadata == nil {
+			continue
+		}
+		if value, ok := msg.Metadata["targetAgent"].(string); ok && value != "" {
+			return value
+		}
 	}
-	end := start + height
-	if end > len(lines) {
-		end = len(lines)
+	return ""
+}
+
+func shortTaskID(id string) string {
+	if len(id) <= 16 {
+		return id
 	}
-	view := lines[start:end]
-	if len(view) < height {
-		pad := make([]string, height-len(view))
-		view = append(pad, view...)
+	return id[:6] + "..." + id[len(id)-6:]
+}
+
+func padLines(lines []string, height int) string {
+	if len(lines) < height {
+		pad := make([]string, height-len(lines))
+		lines = append(lines, pad...)
+	} else if len(lines) > height {
+		lines = lines[:height]
 	}
-	return strings.Join(view, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func (m model) sendLogLines(wrapWidth int) []string {
@@ -1598,6 +2407,13 @@ func (m model) sendLogLines(wrapWidth int) []string {
 			label = "You"
 			if entry.Agent != "" {
 				label = "You -> " + entry.Agent
+			}
+			lines = append(lines, confirmStyle.Render(label))
+		case "user-input":
+			// User input during streaming
+			label = "You (input)"
+			if entry.Agent != "" {
+				label = fmt.Sprintf("You -> %s (input)", entry.Agent)
 			}
 			lines = append(lines, confirmStyle.Render(label))
 		case "error":
@@ -1614,8 +2430,58 @@ func (m model) sendLogLines(wrapWidth int) []string {
 		}
 		lines = append(lines, "")
 	}
+
+	// Show streaming output from active agents
+	if m.sending && len(m.streamBuffer) > 0 {
+		for agentID, buffer := range m.streamBuffer {
+			if len(buffer) == 0 {
+				continue
+			}
+			// Show agent header with focus indicator
+			focusIndicator := ""
+			if m.focusedAgent == agentID {
+				focusIndicator = " ● FOCUS"
+			} else if contains(m.pendingPrompts, agentID) {
+				focusIndicator = " ⏳ waiting"
+			} else {
+				focusIndicator = " ↓ streaming"
+			}
+			lines = append(lines, headerStyle.Render(agentID+focusIndicator))
+
+			// Show buffered lines
+			for _, line := range buffer {
+				wrapped := ansi.Wrap(line, wrapWidth, "")
+				for _, wrappedLine := range strings.Split(wrapped, "\n") {
+					lines = append(lines, "  "+wrappedLine)
+				}
+			}
+			lines = append(lines, "")
+		}
+	}
+
 	if m.sending {
-		lines = append(lines, dimStyle.Render("Waiting for response "+m.spinner.View()))
+		if len(m.streamChannels) > 0 {
+			// Streaming mode: show active agents
+			activeCount := 0
+			for _, stream := range m.streamChannels {
+				if !stream.Done {
+					activeCount++
+				}
+			}
+			if activeCount > 0 {
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("%s %d agent(s) active", m.spinner.View(), activeCount)))
+			}
+		} else if len(m.activeAgents) > 0 {
+			// Multi-agent mode (non-streaming fallback)
+			lines = append(lines, dimStyle.Render("Working:"))
+			for agentID := range m.activeAgents {
+				status := m.agentProgress[agentID]
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("  %s %s: %s", m.spinner.View(), agentID, status)))
+			}
+		} else {
+			// Single agent mode
+			lines = append(lines, dimStyle.Render("Waiting for response "+m.spinner.View()))
+		}
 	}
 	if len(lines) > 0 && strings.TrimSpace(stripANSI(lines[len(lines)-1])) == "" {
 		lines = lines[:len(lines)-1]
@@ -1623,46 +2489,142 @@ func (m model) sendLogLines(wrapWidth int) []string {
 	return lines
 }
 
-func (m *model) scrollSendLog(key string) {
-	width, height := modalSize(m.width, m.height)
-	inputWidth, _, logHeight := sendModalLayout(width, height)
-	if logHeight <= 0 {
+// contains checks if a string slice contains a value
+func contains(slice []string, value string) bool {
+	for _, v := range slice {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) sendLogLayout() (int, int) {
+	if m.showSendModal {
+		width, height := modalSize(m.width, m.height)
+		inputWidth, _, logHeight, _ := sendModalLayout(width, height)
+		return inputWidth, logHeight
+	}
+	width, height := m.bodySize()
+	inputWidth, _, logHeight, _ := sendViewLayout(width, height)
+	return inputWidth, logHeight
+}
+
+func (m *model) syncSendViewport() {
+	if !m.showSendModal && m.activeTab != tabSend {
 		return
 	}
-	wrapWidth := inputWidth - 2
+	width, height := m.sendLogLayout()
+	if width <= 0 || height <= 0 {
+		return
+	}
+	wrapWidth := width - 2
 	if wrapWidth < 1 {
-		wrapWidth = inputWidth
+		wrapWidth = width
 	}
 	lines := m.sendLogLines(wrapWidth)
 	if len(lines) == 0 {
 		lines = []string{dimStyle.Render("No messages yet.")}
 	}
-	maxOffset := max(0, len(lines)-logHeight)
-	delta := 0
-	switch key {
-	case "pgup":
-		delta = logHeight
-	case "pgdown":
-		delta = -logHeight
-	case "up":
-		delta = 1
-	case "down":
-		delta = -1
-	case "ctrl+u":
-		delta = max(1, logHeight/2)
-	case "ctrl+d":
-		delta = -max(1, logHeight/2)
+	atBottom := m.sendViewport.AtBottom()
+	m.sendViewport.Width = width
+	m.sendViewport.Height = height
+	m.sendViewport.SetContent(strings.Join(lines, "\n"))
+	m.sendViewport.SetYOffset(m.sendViewport.YOffset)
+
+	// Auto-scroll to bottom when streaming or if already at bottom
+	if atBottom || m.sending || m.focusedAgent != "" || len(m.streamBuffer) > 0 {
+		m.sendViewport.GotoBottom()
 	}
-	if delta == 0 {
+}
+
+func (m *model) scrollSendViewport(msg tea.KeyMsg) tea.Cmd {
+	m.syncSendViewport()
+	var cmd tea.Cmd
+	m.sendViewport, cmd = m.sendViewport.Update(msg)
+	return cmd
+}
+
+func (m *model) seedSendLogFromTasks() {
+	if m.sendLogSeeded {
 		return
 	}
-	m.sendLogOffset += delta
-	if m.sendLogOffset < 0 {
-		m.sendLogOffset = 0
+	m.sendLogSeeded = true
+	if len(m.tasks) == 0 {
+		return
 	}
-	if m.sendLogOffset > maxOffset {
-		m.sendLogOffset = maxOffset
+	tasks := append([]types.Task{}, m.tasks...)
+	sort.Slice(tasks, func(i, j int) bool {
+		return taskStatusTime(tasks[i]).Before(taskStatusTime(tasks[j]))
+	})
+	entries := make([]sendEntry, 0, len(tasks)*2)
+	for _, task := range tasks {
+		statusTime := taskStatusTime(task)
+		if !statusTime.IsZero() && statusTime.After(m.sessionStart) {
+			continue
+		}
+		entries = append(entries, sendEntriesFromTask(task)...)
 	}
+	if len(entries) == 0 {
+		return
+	}
+	m.sendLog = append(entries, m.sendLog...)
+	m.syncSendViewport()
+}
+
+func sendEntriesFromTask(task types.Task) []sendEntry {
+	agent := taskTargetAgent(task)
+	if agent == "" {
+		agent = "unknown"
+	}
+	entries := []sendEntry{}
+	for _, msg := range task.History {
+		if msg.Role != "user" {
+			continue
+		}
+		text := messageText(msg)
+		if text == "" {
+			continue
+		}
+		entries = append(entries, sendEntry{
+			Role:      "user",
+			Agent:     agent,
+			Text:      text,
+			Timestamp: task.Status.Timestamp,
+		})
+		break
+	}
+	responseText := strings.TrimSpace(extractTaskText(task))
+	if responseText != "" {
+		entries = append(entries, sendEntry{
+			Role:      "agent",
+			Agent:     agent,
+			Text:      responseText,
+			Timestamp: task.Status.Timestamp,
+		})
+	}
+	return entries
+}
+
+func messageText(msg types.Message) string {
+	parts := make([]string, 0, len(msg.Parts))
+	for _, part := range msg.Parts {
+		if part.Kind == "text" {
+			parts = append(parts, part.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func taskStatusTime(task types.Task) time.Time {
+	if task.Status.Timestamp == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, task.Status.Timestamp)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func parseAgentList(input string) []string {
@@ -1822,4 +2784,156 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+// parseMentions parses @agent mentions from text
+// Single agent: "@vibe say something to @gemini" -> {"vibe": "say something to @gemini"}
+// Multi-agent: "@claude write API, @gemini write UI" -> {"claude": "write API", "gemini": "write UI"}
+// Multi-agent: "@claude task1 and @gemini task2" -> {"claude": "task1", "gemini": "task2"}
+func parseMentions(text string) map[string]string {
+	text = strings.TrimSpace(text)
+	result := make(map[string]string)
+
+	// First, check if this is a simple single-agent message: @agent <message>
+	singlePattern := regexp.MustCompile(`^@(\w+)\s+(.+)$`)
+	if match := singlePattern.FindStringSubmatch(text); len(match) == 3 {
+		agentID := strings.ToLower(match[1])
+		task := strings.TrimSpace(match[2])
+		// Check if task contains other @mentions with their own tasks (multi-agent pattern)
+		if !containsValidMultiMention(task) {
+			result[agentID] = task
+			return result
+		}
+	}
+
+	// Multi-agent: split by comma or " and "
+	// Pattern: @agent task, @agent2 task2
+	parts := splitMentionsByDelimiters(text)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if match := regexp.MustCompile(`^@(\w+)\s+(.+)$`).FindStringSubmatch(part); len(match) == 3 {
+			result[strings.ToLower(match[1])] = strings.TrimSpace(match[2])
+		}
+	}
+	return result
+}
+
+// containsValidMultiMention checks if text has pattern like ", @agent task" or " and @agent task"
+func containsValidMultiMention(text string) bool {
+	// Look for ", @word word+" or " and @word word+"
+	pattern := regexp.MustCompile(`(?:,\s*|\s+and\s+)@\w+\s+\S`)
+	return pattern.MatchString(text)
+}
+
+// splitMentionsByDelimiters splits text on ", @" or " and @" while keeping the @
+func splitMentionsByDelimiters(text string) []string {
+	// Replace ", @" and " and @" with a unique delimiter, keeping the @
+	text = regexp.MustCompile(`,\s*@`).ReplaceAllString(text, "\x00@")
+	text = regexp.MustCompile(`\s+and\s+@`).ReplaceAllString(text, "\x00@")
+	return strings.Split(text, "\x00")
+}
+
+// formatMentionsSummary creates a display summary of multi-agent tasks
+func formatMentionsSummary(mentions map[string]string) string {
+	var parts []string
+	for agentID, task := range mentions {
+		parts = append(parts, fmt.Sprintf("@%s: %s", agentID, task))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// sendToAgentCmd creates a command that sends a task to a specific agent (non-streaming fallback)
+func sendToAgentCmd(caller *hub.LocalCaller, agentID, taskText string) tea.Cmd {
+	return func() tea.Msg {
+		msg := types.Message{
+			Kind:      "message",
+			MessageID: utils.NewID("msg"),
+			Role:      "user",
+			Parts:     []types.Part{{Kind: "text", Text: taskText}},
+			Metadata:  map[string]any{"targetAgent": agentID},
+		}
+		params, _ := json.Marshal(map[string]any{
+			"message":       msg,
+			"configuration": map[string]any{"historyLength": 10},
+		})
+		resp, err := caller.Call(context.Background(), "message/send", params)
+		if err != nil {
+			return agentResultMsg{agentID: agentID, err: err}
+		}
+		if resp.Error != nil {
+			return agentResultMsg{agentID: agentID, err: fmt.Errorf(resp.Error.Message)}
+		}
+		var task types.Task
+		if err := decodeResult(resp.Result, &task); err != nil {
+			return agentResultMsg{agentID: agentID, err: err}
+		}
+		return agentResultMsg{agentID: agentID, text: extractTaskText(task)}
+	}
+}
+
+// startStreamingCmd starts a streaming execution for an agent
+func startStreamingCmd(server *hub.Server, agentID, message string, stream *AgentStream) tea.Cmd {
+	return func() tea.Msg {
+		info, ok := server.Registry().Get(agentID)
+		if !ok {
+			stream.Output <- types.StreamEvent{Kind: "error", Text: "agent not found", AgentID: agentID, Timestamp: time.Now().UTC()}
+			close(stream.Output)
+			return nil
+		}
+
+		workingDir, _ := os.Getwd()
+		ctx := types.ExecutionContext{
+			TaskID:      utils.NewID("task"),
+			ContextID:   utils.NewID("ctx"),
+			UserMessage: types.Message{Kind: "message", Role: "user", Parts: []types.Part{{Kind: "text", Text: message}}},
+			WorkingDir:  workingDir,
+		}
+
+		// Check if agent supports streaming
+		if streamer, ok := info.Agent.(types.StreamingExecutor); ok {
+			go func() {
+				defer close(stream.Output)
+				_ = streamer.ExecuteStreaming(ctx, stream.Output, stream.Input)
+			}()
+		} else {
+			// Fallback: run non-streaming and emit single result
+			go func() {
+				defer close(stream.Output)
+				result, err := info.Agent.Execute(ctx)
+				if err != nil {
+					stream.Output <- types.StreamEvent{Kind: "error", Text: err.Error(), AgentID: agentID, Timestamp: time.Now().UTC()}
+				} else {
+					text := extractTaskText(result.Task)
+					stream.Output <- types.StreamEvent{Kind: "output", Text: text, AgentID: agentID, Timestamp: time.Now().UTC()}
+					stream.Output <- types.StreamEvent{Kind: "complete", AgentID: agentID, Timestamp: time.Now().UTC()}
+				}
+			}()
+		}
+		return nil
+	}
+}
+
+// listenAgentStream listens for events from an agent's output channel
+func listenAgentStream(agentID string, ch <-chan types.StreamEvent) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-ch
+		if !ok {
+			return streamEventMsg{agentID: agentID, event: types.StreamEvent{Kind: "complete", AgentID: agentID}}
+		}
+		return streamEventMsg{agentID: agentID, event: event}
+	}
+}
+
+// listenAllStreams returns a batch command to listen on all active streams
+func (m *model) listenAllStreams() tea.Cmd {
+	var cmds []tea.Cmd
+	for agentID, stream := range m.streamChannels {
+		if !stream.Done {
+			cmds = append(cmds, listenAgentStream(agentID, stream.Output))
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
