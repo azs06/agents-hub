@@ -47,6 +47,9 @@ const (
 	settingsFieldCodexSandbox
 	settingsFieldCodexApproval
 	settingsFieldCodexSearch
+	settingsFieldGeminiModel
+	settingsFieldGeminiSandbox
+	settingsFieldGeminiApproval
 	settingsFieldCount
 )
 
@@ -146,6 +149,11 @@ type model struct {
 	codexSandboxInput  textinput.Model
 	codexApprovalInput textinput.Model
 	codexSearch        bool
+
+	// Gemini settings
+	geminiModelInput    textinput.Model
+	geminiApprovalInput textinput.Model
+	geminiSandbox       bool
 
 	confirmQuit    bool
 	confirmMessage string
@@ -303,6 +311,18 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	codexApprovalInput.SetValue(codexSettings.DefaultApprovalPolicy)
 	codexApprovalInput.Width = 40
 
+	// Gemini settings inputs
+	geminiSettings := server.GeminiSettings()
+	geminiModelInput := textinput.New()
+	geminiModelInput.Placeholder = "gemini-1.5-pro, gemini-1.5-flash (blank for default)"
+	geminiModelInput.SetValue(geminiSettings.DefaultModel)
+	geminiModelInput.Width = 40
+
+	geminiApprovalInput := textinput.New()
+	geminiApprovalInput.Placeholder = "default, auto_edit, yolo (blank for default)"
+	geminiApprovalInput.SetValue(geminiSettings.DefaultApprovalMode)
+	geminiApprovalInput.Width = 40
+
 	agentsList := newListModel()
 	tasksList := newListModel()
 	responsesList := newListModel()
@@ -350,6 +370,9 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 		codexSandboxInput:  codexSandboxInput,
 		codexApprovalInput: codexApprovalInput,
 		codexSearch:        codexSettings.EnableSearch,
+		geminiModelInput:   geminiModelInput,
+		geminiApprovalInput: geminiApprovalInput,
+		geminiSandbox:      geminiSettings.DefaultSandbox,
 		settingsFocusIndex: 0,
 		showSendModal:      true,
 		activeAgents:       make(map[string]string),
@@ -793,130 +816,84 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				}
-				if m.settingsFocusIndex == settingsFieldCodexSearch {
-					m.codexSearch = !m.codexSearch
-					if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else {
-						m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
+				                if m.settingsFocusIndex == settingsFieldCodexSearch {
+									m.codexSearch = !m.codexSearch
+									if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
+									}
+									return m, nil
+								}
+								if m.settingsFocusIndex == settingsFieldGeminiSandbox {
+									m.geminiSandbox = !m.geminiSandbox
+									if err := m.server.UpdateGeminiSandbox(m.geminiSandbox); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Gemini sandbox: %t", m.geminiSandbox)
+									}
+									return m, nil
+								}
+							case "enter":
+								switch m.settingsFocusIndex {
+				                // ...
+								case settingsFieldGeminiModel:
+									model := strings.TrimSpace(m.geminiModelInput.Value())
+									if err := m.server.UpdateGeminiModel(model); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else if model == "" {
+										m.settingsMessage = "Gemini model: default"
+									} else {
+										m.settingsMessage = "Gemini model: " + model
+									}
+								case settingsFieldGeminiSandbox:
+									m.geminiSandbox = !m.geminiSandbox
+									if err := m.server.UpdateGeminiSandbox(m.geminiSandbox); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Gemini sandbox: %t", m.geminiSandbox)
+									}
+								case settingsFieldGeminiApproval:
+									mode := strings.TrimSpace(m.geminiApprovalInput.Value())
+									if mode != "" && mode != "default" && mode != "auto_edit" && mode != "yolo" {
+										m.settingsMessage = "Invalid mode: use default, auto_edit, yolo, or blank"
+										return m, nil
+									}
+									if err := m.server.UpdateGeminiApprovalMode(mode); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else if mode == "" {
+										m.settingsMessage = "Gemini approval: default"
+									} else {
+										m.settingsMessage = "Gemini approval: " + mode
+									}
+								}
+								return m, nil
+							}
+						}
+						// Update the focused input
+						var cmd tea.Cmd
+						switch m.settingsFocusIndex {
+						case settingsFieldOrchestrator:
+							m.settingsInput, cmd = m.settingsInput.Update(msg)
+						case settingsFieldClaudeModel:
+							m.claudeModelInput, cmd = m.claudeModelInput.Update(msg)
+						case settingsFieldClaudeTools:
+							m.claudeToolsInput, cmd = m.claudeToolsInput.Update(msg)
+						case settingsFieldCodexModel:
+							m.codexModelInput, cmd = m.codexModelInput.Update(msg)
+						case settingsFieldCodexProfile:
+							m.codexProfileInput, cmd = m.codexProfileInput.Update(msg)
+						case settingsFieldCodexSandbox:
+							m.codexSandboxInput, cmd = m.codexSandboxInput.Update(msg)
+						case settingsFieldCodexApproval:
+							m.codexApprovalInput, cmd = m.codexApprovalInput.Update(msg)
+						case settingsFieldGeminiModel:
+							m.geminiModelInput, cmd = m.geminiModelInput.Update(msg)
+						case settingsFieldGeminiApproval:
+							m.geminiApprovalInput, cmd = m.geminiApprovalInput.Update(msg)
+						}
+						return m, cmd
 					}
-					return m, nil
-				}
-			case "enter":
-				switch m.settingsFocusIndex {
-				case settingsFieldOrchestrator:
-					agents := parseAgentList(m.settingsInput.Value())
-					label := strings.Join(agents, ",")
-					if label == "" {
-						label = "none"
-					}
-					if m.server.UpdateOrchestratorAgents(agents) {
-						m.settingsMessage = "Updated orchestrator delegates: " + label
-					} else {
-						m.settingsMessage = "Saved settings; restart to apply: " + label
-					}
-					m.settingsInput.SetValue(strings.Join(agents, ","))
-				case settingsFieldClaudeModel:
-					model := strings.TrimSpace(m.claudeModelInput.Value())
-					if err := m.server.UpdateClaudeModel(model); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else if model == "" {
-						m.settingsMessage = "Claude model: default"
-					} else {
-						m.settingsMessage = "Claude model: " + model
-					}
-				case settingsFieldClaudeTools:
-					profile := strings.TrimSpace(m.claudeToolsInput.Value())
-					if err := m.server.UpdateClaudeToolProfile(profile); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else if profile == "" {
-						m.settingsMessage = "Claude tools: all (default)"
-					} else {
-						m.settingsMessage = "Claude tools: " + profile
-					}
-				case settingsFieldClaudeContinue:
-					m.claudeContinue = !m.claudeContinue
-					if err := m.server.UpdateClaudeContinue(m.claudeContinue); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else {
-						m.settingsMessage = fmt.Sprintf("Continue mode: %t", m.claudeContinue)
-					}
-				case settingsFieldCodexModel:
-					model := strings.TrimSpace(m.codexModelInput.Value())
-					if err := m.server.UpdateCodexModel(model); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else if model == "" {
-						m.settingsMessage = "Codex model: default"
-					} else {
-						m.settingsMessage = "Codex model: " + model
-					}
-				case settingsFieldCodexProfile:
-					profile := strings.TrimSpace(m.codexProfileInput.Value())
-					if err := m.server.UpdateCodexProfile(profile); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else if profile == "" {
-						m.settingsMessage = "Codex profile: default"
-					} else {
-						m.settingsMessage = "Codex profile: " + profile
-					}
-				case settingsFieldCodexSandbox:
-					mode := strings.TrimSpace(m.codexSandboxInput.Value())
-					if mode != "" && mode != "read-only" && mode != "workspace-write" && mode != "danger-full-access" {
-						m.settingsMessage = "Invalid sandbox: use read-only, workspace-write, danger-full-access, or blank"
-						return m, nil
-					}
-					if err := m.server.UpdateCodexSandbox(mode); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else if mode == "" {
-						m.settingsMessage = "Codex sandbox: default"
-					} else {
-						m.settingsMessage = "Codex sandbox: " + mode
-					}
-				case settingsFieldCodexApproval:
-					policy := strings.TrimSpace(m.codexApprovalInput.Value())
-					if policy != "" && policy != "untrusted" && policy != "on-failure" && policy != "on-request" && policy != "never" {
-						m.settingsMessage = "Invalid approval: use untrusted, on-failure, on-request, never, or blank"
-						return m, nil
-					}
-					if err := m.server.UpdateCodexApprovalPolicy(policy); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else if policy == "" {
-						m.settingsMessage = "Codex approval: default"
-					} else {
-						m.settingsMessage = "Codex approval: " + policy
-					}
-				case settingsFieldCodexSearch:
-					m.codexSearch = !m.codexSearch
-					if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
-						m.settingsMessage = "Failed to save: " + err.Error()
-					} else {
-						m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
-					}
-				}
-				return m, nil
-			}
-		}
-		// Update the focused input
-		var cmd tea.Cmd
-		switch m.settingsFocusIndex {
-		case settingsFieldOrchestrator:
-			m.settingsInput, cmd = m.settingsInput.Update(msg)
-		case settingsFieldClaudeModel:
-			m.claudeModelInput, cmd = m.claudeModelInput.Update(msg)
-		case settingsFieldClaudeTools:
-			m.claudeToolsInput, cmd = m.claudeToolsInput.Update(msg)
-		case settingsFieldCodexModel:
-			m.codexModelInput, cmd = m.codexModelInput.Update(msg)
-		case settingsFieldCodexProfile:
-			m.codexProfileInput, cmd = m.codexProfileInput.Update(msg)
-		case settingsFieldCodexSandbox:
-			m.codexSandboxInput, cmd = m.codexSandboxInput.Update(msg)
-		case settingsFieldCodexApproval:
-			m.codexApprovalInput, cmd = m.codexApprovalInput.Update(msg)
-		}
-		return m, cmd
-	}
-
 	if m.activeTab == tabSend {
 		var cmd tea.Cmd
 		if key, ok := msg.(tea.KeyMsg); ok {
@@ -1224,6 +1201,33 @@ func (m *model) applyCommand(input string) tea.Cmd {
 			m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
 		}
 		return nil
+	case "gemini-model":
+		if len(parts) >= 2 {
+			model := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if err := m.server.UpdateGeminiModel(model); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else if model == "" {
+				m.settingsMessage = "Gemini model: default"
+			} else {
+				m.settingsMessage = "Gemini model: " + model
+			}
+			m.geminiModelInput.SetValue(model)
+		} else {
+			m.errMsg = "Usage: /gemini-model <model>"
+		}
+		return nil
+	case "gemini-resume":
+		if len(parts) >= 2 {
+			sessionID := strings.TrimSpace(parts[1])
+			if err := m.server.UpdateGeminiResume(sessionID); err != nil {
+				m.errMsg = "Failed to save: " + err.Error()
+			} else {
+				m.settingsMessage = "Gemini session resumed: " + sessionID
+			}
+		} else {
+			m.errMsg = "Usage: /gemini-resume <id>"
+		}
+		return nil
 	default:
 		m.errMsg = fmt.Sprintf("unknown command: %s", input)
 		m.addLog("warn", m.errMsg)
@@ -1349,6 +1353,9 @@ var commandCatalog = []commandSpec{
 	{Name: "codex-sandbox", Usage: "/codex-sandbox <mode>", Description: "set Codex sandbox mode"},
 	{Name: "codex-approval", Usage: "/codex-approval <policy>", Description: "set Codex approval policy"},
 	{Name: "codex-search", Usage: "/codex-search", Description: "toggle Codex web search"},
+	// Gemini settings commands
+	{Name: "gemini-model", Usage: "/gemini-model <model>", Description: "set Gemini model"},
+	{Name: "gemini-resume", Usage: "/gemini-resume <id>", Description: "resume a Gemini session"},
 }
 
 func (m *model) appendCommandHistory(cmd string) {
@@ -1784,6 +1791,9 @@ func (m model) viewSettings() string {
 	codexSandboxIndicator := "  "
 	codexApprovalIndicator := "  "
 	codexSearchIndicator := "  "
+	geminiModelIndicator := "  "
+	geminiSandboxIndicator := "  "
+	geminiApprovalIndicator := "  "
 	switch m.settingsFocusIndex {
 	case settingsFieldOrchestrator:
 		orchIndicator = "> "
@@ -1803,6 +1813,12 @@ func (m model) viewSettings() string {
 		codexApprovalIndicator = "> "
 	case settingsFieldCodexSearch:
 		codexSearchIndicator = "> "
+	case settingsFieldGeminiModel:
+		geminiModelIndicator = "> "
+	case settingsFieldGeminiSandbox:
+		geminiSandboxIndicator = "> "
+	case settingsFieldGeminiApproval:
+		geminiApprovalIndicator = "> "
 	}
 
 	// Continue mode checkbox
@@ -1814,6 +1830,11 @@ func (m model) viewSettings() string {
 	codexSearchCheck := "[ ]"
 	if m.codexSearch {
 		codexSearchCheck = "[x]"
+	}
+
+	geminiSandboxCheck := "[ ]"
+	if m.geminiSandbox {
+		geminiSandboxCheck = "[x]"
 	}
 
 	lines := []string{
@@ -1853,6 +1874,16 @@ func (m model) viewSettings() string {
 		dimStyle.Render("  untrusted, on-failure, on-request, never (blank = default)"),
 		codexSearchIndicator + "Web Search: " + codexSearchCheck,
 		dimStyle.Render("  Enable web_search tool"),
+		"",
+		headerStyle.Render("Gemini Settings"),
+		geminiModelIndicator + "Model:",
+		"  " + m.geminiModelInput.View(),
+		dimStyle.Render("  gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash (blank = default)"),
+		geminiSandboxIndicator + "Sandbox: " + geminiSandboxCheck,
+		dimStyle.Render("  Run in sandbox"),
+		geminiApprovalIndicator + "Approval Mode:",
+		"  " + m.geminiApprovalInput.View(),
+		dimStyle.Render("  default, auto_edit, yolo (blank = default)"),
 		"",
 		dimStyle.Render("Tab/Shift+Tab to navigate, Enter to apply, Space to toggle"),
 	}
@@ -2128,6 +2159,8 @@ func (m *model) setSettingsFocus(active bool) {
 	m.codexProfileInput.Blur()
 	m.codexSandboxInput.Blur()
 	m.codexApprovalInput.Blur()
+	m.geminiModelInput.Blur()
+	m.geminiApprovalInput.Blur()
 }
 
 func (m *model) updateSettingsFieldFocus() {
@@ -2139,6 +2172,8 @@ func (m *model) updateSettingsFieldFocus() {
 	m.codexProfileInput.Blur()
 	m.codexSandboxInput.Blur()
 	m.codexApprovalInput.Blur()
+	m.geminiModelInput.Blur()
+	m.geminiApprovalInput.Blur()
 
 	// Focus the selected field
 	switch m.settingsFocusIndex {
@@ -2156,6 +2191,10 @@ func (m *model) updateSettingsFieldFocus() {
 		m.codexSandboxInput.Focus()
 	case settingsFieldCodexApproval:
 		m.codexApprovalInput.Focus()
+	case settingsFieldGeminiModel:
+		m.geminiModelInput.Focus()
+	case settingsFieldGeminiApproval:
+		m.geminiApprovalInput.Focus()
 		// checkbox fields don't get focus
 	}
 }

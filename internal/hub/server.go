@@ -126,6 +126,11 @@ func (s *Server) applySettingsToAgents() {
 			setter.SetDefaultConfig(s.GetCodexConfig())
 		}
 	}
+	if info, ok := s.registry.Get("gemini"); ok {
+		if setter, ok := info.Agent.(interface{ SetDefaultConfig(types.GeminiConfig) }); ok {
+			setter.SetDefaultConfig(s.GetGeminiConfig())
+		}
+	}
 }
 
 func extractWorkingDir(metadata map[string]any) string {

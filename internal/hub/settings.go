@@ -15,6 +15,7 @@ type Settings struct {
 	LastAgent          string               `json:"lastAgent"`
 	Claude             types.ClaudeSettings `json:"claude,omitempty"`
 	Codex              types.CodexSettings  `json:"codex,omitempty"`
+	Gemini             types.GeminiSettings `json:"gemini,omitempty"`
 }
 
 func (s *Server) SettingsPath() string {
@@ -186,5 +187,56 @@ func (s *Server) GetCodexConfig() types.CodexConfig {
 		EnableFeatures:  append([]string{}, s.settings.Codex.EnableFeatures...),
 		DisableFeatures: append([]string{}, s.settings.Codex.DisableFeatures...),
 		IncludeHistory:  s.settings.Codex.IncludeHistory,
+	}
+}
+
+// GeminiSettings returns the current Gemini configuration.
+func (s *Server) GeminiSettings() types.GeminiSettings {
+	return s.settings.Gemini
+}
+
+// UpdateGeminiSettings updates Gemini configuration and persists it.
+func (s *Server) UpdateGeminiSettings(settings types.GeminiSettings) error {
+	s.settings.Gemini = settings
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateGeminiModel updates the default Gemini model.
+func (s *Server) UpdateGeminiModel(model string) error {
+	s.settings.Gemini.DefaultModel = model
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateGeminiSandbox updates the default Gemini sandbox mode.
+func (s *Server) UpdateGeminiSandbox(enabled bool) error {
+	s.settings.Gemini.DefaultSandbox = enabled
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateGeminiApprovalMode updates the default Gemini approval mode.
+func (s *Server) UpdateGeminiApprovalMode(mode string) error {
+	s.settings.Gemini.DefaultApprovalMode = mode
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateGeminiResume updates the Gemini session to resume.
+func (s *Server) UpdateGeminiResume(sessionID string) error {
+	s.settings.Gemini.ResumeSession = sessionID
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// GetGeminiConfig builds a GeminiConfig from current settings.
+func (s *Server) GetGeminiConfig() types.GeminiConfig {
+	return types.GeminiConfig{
+		Model:        types.GeminiModel(s.settings.Gemini.DefaultModel),
+		Sandbox:      s.settings.Gemini.DefaultSandbox,
+		ApprovalMode: s.settings.Gemini.DefaultApprovalMode,
+		AllowedTools: s.settings.Gemini.CustomAllowedTools,
+		Resume:       s.settings.Gemini.ResumeSession,
 	}
 }

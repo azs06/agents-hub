@@ -269,6 +269,21 @@ Codex supports additional runtime configuration:
 /codex-search
 ```
 
+## Gemini Settings
+
+Gemini supports runtime configuration:
+
+### Model Selection
+
+```bash
+# Via TUI command
+/gemini-model gemini-1.5-pro
+```
+
+### Settings UI
+
+In the TUI Settings tab, you can configure the default Gemini model.
+
 ## Multi-Agent Messaging
 
 Send tasks to multiple agents using @mentions:
