@@ -131,6 +131,11 @@ func (s *Server) applySettingsToAgents() {
 			setter.SetDefaultConfig(s.GetGeminiConfig())
 		}
 	}
+	if info, ok := s.registry.Get("vibe"); ok {
+		if setter, ok := info.Agent.(interface{ SetDefaultConfig(types.VibeConfig) }); ok {
+			setter.SetDefaultConfig(s.GetVibeConfig())
+		}
+	}
 }
 
 func extractWorkingDir(metadata map[string]any) string {

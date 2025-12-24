@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -33,6 +34,7 @@ const (
 	tabTasks
 	tabSend
 	tabHistory
+	tabActivity
 	tabSettings
 	tabCount
 )
@@ -50,6 +52,10 @@ const (
 	settingsFieldGeminiModel
 	settingsFieldGeminiSandbox
 	settingsFieldGeminiApproval
+	settingsFieldVibeAgent
+	settingsFieldVibeNonInteractive
+	settingsFieldVibeAutoApprove
+	settingsFieldVibeIncludeHistory
 	settingsFieldCount
 )
 
@@ -61,7 +67,12 @@ var (
 	logStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	confirmStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	inputBackground = lipgloss.AdaptiveColor{Light: "252", Dark: "236"}
-	msgBoxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Background(inputBackground)
+	accentColor     = lipgloss.Color("39") // Cyan/blue accent
+	msgBoxStyle     = lipgloss.NewStyle().
+			Border(lipgloss.ThickBorder(), false, false, false, true).
+			BorderForeground(accentColor).
+			Background(inputBackground).
+			PaddingLeft(1)
 )
 
 type statusData struct {
@@ -154,6 +165,12 @@ type model struct {
 	geminiModelInput    textinput.Model
 	geminiApprovalInput textinput.Model
 	geminiSandbox       bool
+
+	// Vibe settings
+	vibeAgentInput     textinput.Model
+	vibeNonInteractive bool
+	vibeAutoApprove    bool
+	vibeIncludeHistory bool
 
 	confirmQuit    bool
 	confirmMessage string
@@ -267,6 +284,12 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	msgInput.BlurredStyle.Base = msgInput.BlurredStyle.Base.Background(inputBackground)
 	msgInput.FocusedStyle.CursorLine = msgInput.FocusedStyle.CursorLine.Background(inputBackground)
 	msgInput.BlurredStyle.CursorLine = msgInput.BlurredStyle.CursorLine.Background(inputBackground)
+	msgInput.FocusedStyle.Text = msgInput.FocusedStyle.Text.Background(inputBackground)
+	msgInput.BlurredStyle.Text = msgInput.BlurredStyle.Text.Background(inputBackground)
+	msgInput.FocusedStyle.Placeholder = msgInput.FocusedStyle.Placeholder.Background(inputBackground)
+	msgInput.BlurredStyle.Placeholder = msgInput.BlurredStyle.Placeholder.Background(inputBackground)
+	msgInput.FocusedStyle.EndOfBuffer = msgInput.FocusedStyle.EndOfBuffer.Background(inputBackground)
+	msgInput.BlurredStyle.EndOfBuffer = msgInput.BlurredStyle.EndOfBuffer.Background(inputBackground)
 	commandInput := textinput.New()
 	commandInput.Placeholder = "command"
 	commandInput.Prompt = "/ "
@@ -323,6 +346,13 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	geminiApprovalInput.SetValue(geminiSettings.DefaultApprovalMode)
 	geminiApprovalInput.Width = 40
 
+	// Vibe settings inputs
+	vibeSettings := server.VibeSettings()
+	vibeAgentInput := textinput.New()
+	vibeAgentInput.Placeholder = "agent name from ~/.vibe/agents/ (blank for default)"
+	vibeAgentInput.SetValue(vibeSettings.DefaultAgent)
+	vibeAgentInput.Width = 40
+
 	agentsList := newListModel()
 	tasksList := newListModel()
 	responsesList := newListModel()
@@ -373,6 +403,10 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 		geminiModelInput:   geminiModelInput,
 		geminiApprovalInput: geminiApprovalInput,
 		geminiSandbox:      geminiSettings.DefaultSandbox,
+		vibeAgentInput:     vibeAgentInput,
+		vibeNonInteractive: vibeSettings.NonInteractive,
+		vibeAutoApprove:    vibeSettings.AutoApprove,
+		vibeIncludeHistory: vibeSettings.IncludeHistory,
 		settingsFocusIndex: 0,
 		showSendModal:      true,
 		activeAgents:       make(map[string]string),
@@ -383,7 +417,7 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	}
 	m.updateMessagePrompt()
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	server.Registry().Stop()
 	server.RemovePid()
@@ -834,6 +868,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									}
 									return m, nil
 								}
+								if m.settingsFocusIndex == settingsFieldVibeNonInteractive {
+									m.vibeNonInteractive = !m.vibeNonInteractive
+									if err := m.server.UpdateVibeNonInteractive(m.vibeNonInteractive); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Vibe non-interactive: %t", m.vibeNonInteractive)
+									}
+									return m, nil
+								}
+								if m.settingsFocusIndex == settingsFieldVibeAutoApprove {
+									m.vibeAutoApprove = !m.vibeAutoApprove
+									if err := m.server.UpdateVibeAutoApprove(m.vibeAutoApprove); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Vibe auto-approve: %t", m.vibeAutoApprove)
+									}
+									return m, nil
+								}
+								if m.settingsFocusIndex == settingsFieldVibeIncludeHistory {
+									m.vibeIncludeHistory = !m.vibeIncludeHistory
+									if err := m.server.UpdateVibeIncludeHistory(m.vibeIncludeHistory); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Vibe include history: %t", m.vibeIncludeHistory)
+									}
+									return m, nil
+								}
 							case "enter":
 								switch m.settingsFocusIndex {
 				                // ...
@@ -866,6 +927,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									} else {
 										m.settingsMessage = "Gemini approval: " + mode
 									}
+								case settingsFieldVibeAgent:
+									agent := strings.TrimSpace(m.vibeAgentInput.Value())
+									if err := m.server.UpdateVibeAgent(agent); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else if agent == "" {
+										m.settingsMessage = "Vibe agent: default"
+									} else {
+										m.settingsMessage = "Vibe agent: " + agent
+									}
+								case settingsFieldVibeNonInteractive:
+									m.vibeNonInteractive = !m.vibeNonInteractive
+									if err := m.server.UpdateVibeNonInteractive(m.vibeNonInteractive); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Vibe non-interactive: %t", m.vibeNonInteractive)
+									}
+								case settingsFieldVibeAutoApprove:
+									m.vibeAutoApprove = !m.vibeAutoApprove
+									if err := m.server.UpdateVibeAutoApprove(m.vibeAutoApprove); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Vibe auto-approve: %t", m.vibeAutoApprove)
+									}
+								case settingsFieldVibeIncludeHistory:
+									m.vibeIncludeHistory = !m.vibeIncludeHistory
+									if err := m.server.UpdateVibeIncludeHistory(m.vibeIncludeHistory); err != nil {
+										m.settingsMessage = "Failed to save: " + err.Error()
+									} else {
+										m.settingsMessage = fmt.Sprintf("Vibe include history: %t", m.vibeIncludeHistory)
+									}
 								}
 								return m, nil
 							}
@@ -891,6 +982,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.geminiModelInput, cmd = m.geminiModelInput.Update(msg)
 						case settingsFieldGeminiApproval:
 							m.geminiApprovalInput, cmd = m.geminiApprovalInput.Update(msg)
+						case settingsFieldVibeAgent:
+							m.vibeAgentInput, cmd = m.vibeAgentInput.Update(msg)
 						}
 						return m, cmd
 					}
@@ -966,6 +1059,8 @@ func (m model) View() string {
 		}
 	case tabHistory:
 		body = m.viewHistory()
+	case tabActivity:
+		body = m.viewActivity()
 	case tabSettings:
 		body = m.viewSettings()
 	}
@@ -1031,6 +1126,11 @@ func (m *model) applyCommand(input string) tea.Cmd {
 		m.showSendModal = false
 		m.setSettingsFocus(false)
 		return nil
+	case "activity":
+		m.activeTab = tabActivity
+		m.showSendModal = false
+		m.setSettingsFocus(false)
+		return refreshAllCmd(m.caller)
 	case "settings":
 		m.activeTab = tabSettings
 		m.showSendModal = false
@@ -1336,12 +1436,14 @@ var commandCatalog = []commandSpec{
 	{Name: "agents", Usage: "/agents", Description: "show agents list"},
 	{Name: "tasks", Usage: "/tasks", Description: "show tasks list"},
 	{Name: "history", Usage: "/history", Description: "show response history"},
+	{Name: "activity", Usage: "/activity", Description: "show task activity"},
 	{Name: "settings", Usage: "/settings", Description: "show runtime settings"},
 	{Name: "send", Usage: "/send <agent> <msg>", Description: "send a message"},
 	{Name: "agent", Usage: "/agent <id>", Description: "set agent in Send tab"},
 	{Name: "refresh", Usage: "/refresh", Description: "refresh data"},
 	{Name: "help", Usage: "/help", Description: "show help overlay"},
 	{Name: "quit", Usage: "/quit", Description: "exit the TUI"},
+	{Name: "exit", Usage: "/exit", Description: "exit the TUI"},
 	{Name: "q", Usage: "/q", Description: "exit the TUI"},
 	// Claude settings commands
 	{Name: "claude-model", Usage: "/claude-model <opus|sonnet|haiku>", Description: "set Claude model"},
@@ -1587,25 +1689,19 @@ func (m model) viewTasks() string {
 
 func (m model) viewSend() string {
 	width, height := m.bodySize()
-	inputWidth, msgHeight, logHeight, activityHeight := sendViewLayout(width, height)
-	m.agentInput.Width = inputWidth
+	inputWidth, msgHeight, logHeight := sendViewLayout(width, height)
 	// Account for border width when setting textarea dimensions
-	m.msgInput.SetWidth(inputWidth - 2)
+	m.msgInput.SetWidth(inputWidth - 4)
 	m.msgInput.SetHeight(msgHeight)
 	log := m.renderSendLog(inputWidth, logHeight)
-	activity := m.renderTaskActivity(inputWidth, activityHeight)
-	separator := dimStyle.Render(strings.Repeat("─", inputWidth))
 	msgBox := msgBoxStyle.Width(inputWidth).Render(m.msgInput.View())
+	agentLabel := lipgloss.NewStyle().Foreground(accentColor).Render(m.agentInput.Value())
+	helpText := dimStyle.Render("tab switch agent  ctrl+p commands  enter send")
 	lines := []string{
-		"Agent:",
-		m.agentInput.View(),
-		log,
-		separator,
-		"Activity:",
-		activity,
-		"Message:",
 		msgBox,
-		"enter to send, shift+enter for newline, up/down scroll log, esc to edit agent",
+		agentLabel,
+		log,
+		helpText,
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1613,27 +1709,21 @@ func (m model) viewSend() string {
 func (m model) renderSendModal() string {
 	width, height := modalSize(m.width, m.height)
 
-	inputWidth, msgHeight, logHeight, activityHeight := sendModalLayout(width, height)
-	m.agentInput.Width = inputWidth
+	inputWidth, msgHeight, logHeight := sendModalLayout(width, height)
 	// Account for border width when setting textarea dimensions
-	m.msgInput.SetWidth(inputWidth - 2)
+	m.msgInput.SetWidth(inputWidth - 4)
 	m.msgInput.SetHeight(msgHeight)
 	log := m.renderSendLog(inputWidth, logHeight)
-	activity := m.renderTaskActivity(inputWidth, activityHeight)
-	separator := dimStyle.Render(strings.Repeat("─", inputWidth))
 	msgBox := msgBoxStyle.Width(inputWidth).Render(m.msgInput.View())
+	agentLabel := lipgloss.NewStyle().Foreground(accentColor).Render(m.agentInput.Value())
+	helpText := dimStyle.Render("tab switch agent  ctrl+p commands  enter send  esc close")
 
 	title := headerStyle.Render("Send Message")
 	body := strings.Join([]string{
-		"Agent:",
-		m.agentInput.View(),
-		log,
-		separator,
-		"Activity:",
-		activity,
-		"Message:",
 		msgBox,
-		"enter to send, shift+enter for newline, up/down scroll log, esc to close",
+		agentLabel,
+		log,
+		helpText,
 	}, "\n")
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1682,7 +1772,7 @@ func panelSize(width, height int) (int, int) {
 	return width - 2, height - 2
 }
 
-func sendViewLayout(width, height int) (int, int, int, int) {
+func sendViewLayout(width, height int) (int, int, int) {
 	if width <= 0 {
 		width = 80
 	}
@@ -1696,59 +1786,35 @@ func sendViewLayout(width, height int) (int, int, int, int) {
 	if inputWidth < 20 {
 		inputWidth = 20
 	}
-	msgHeight := 6
+	msgHeight := 1
 	if height > 30 {
-		msgHeight = 8
+		msgHeight = 2
 	}
-	availableHeight := height - (msgHeight + 6)
-	logHeight, activityHeight := splitSendHeights(availableHeight)
-	return inputWidth, msgHeight, logHeight, activityHeight
+	// Height for: Agent label, agent input, log, Message label, msgBox, help line
+	logHeight := height - (msgHeight + 6)
+	if logHeight < 3 {
+		logHeight = 3
+	}
+	return inputWidth, msgHeight, logHeight
 }
 
-func sendModalLayout(width, height int) (int, int, int, int) {
+func sendModalLayout(width, height int) (int, int, int) {
 	inputWidth := width - 6
 	if inputWidth < 20 {
 		inputWidth = 20
 	}
-	msgHeight := 5
+	msgHeight := 1
 	if height >= 20 {
-		msgHeight = 6
+		msgHeight = 2
 	}
 	contentHeight := height - 4
-	availableHeight := contentHeight - (msgHeight + 6)
-	logHeight, activityHeight := splitSendHeights(availableHeight)
-	return inputWidth, msgHeight, logHeight, activityHeight
+	logHeight := contentHeight - (msgHeight + 6)
+	if logHeight < 3 {
+		logHeight = 3
+	}
+	return inputWidth, msgHeight, logHeight
 }
 
-func splitSendHeights(available int) (int, int) {
-	if available < 2 {
-		available = 2
-	}
-	minLog := 3
-	minActivity := 2
-	if available < minLog+minActivity {
-		logHeight := available / 2
-		if logHeight < 1 {
-			logHeight = 1
-		}
-		activityHeight := available - logHeight
-		if activityHeight < 1 {
-			activityHeight = 1
-		}
-		return logHeight, activityHeight
-	}
-	// Give more space to log, less to activity
-	activityHeight := available / 4
-	if activityHeight < minActivity {
-		activityHeight = minActivity
-	}
-	logHeight := available - activityHeight
-	if logHeight < minLog {
-		logHeight = minLog
-		activityHeight = available - logHeight
-	}
-	return logHeight, activityHeight
-}
 
 func (m model) viewHistory() string {
 	leftWidth, rightWidth, height, stacked := m.paneSizes()
@@ -1775,6 +1841,17 @@ func (m model) viewHistory() string {
 	m.detailViewport.Width = rightWidth
 	m.detailViewport.Height = height
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.responsesList.View(), m.detailViewport.View())
+}
+
+func (m model) viewActivity() string {
+	width, height := m.bodySize()
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 20
+	}
+	return m.renderTaskActivity(width, height)
 }
 
 func (m model) viewSettings() string {
@@ -1837,6 +1914,63 @@ func (m model) viewSettings() string {
 		geminiSandboxCheck = "[x]"
 	}
 
+	// Vibe settings indicators
+	vibeAgentIndicator := "  "
+	vibeNonInteractiveIndicator := "  "
+	vibeAutoApproveIndicator := "  "
+	vibeIncludeHistoryIndicator := "  "
+
+	switch m.settingsFocusIndex {
+	case settingsFieldOrchestrator:
+		orchIndicator = "> "
+	case settingsFieldClaudeModel:
+		modelIndicator = "> "
+	case settingsFieldClaudeTools:
+		toolsIndicator = "> "
+	case settingsFieldClaudeContinue:
+		contIndicator = "> "
+	case settingsFieldCodexModel:
+		codexModelIndicator = "> "
+	case settingsFieldCodexProfile:
+		codexProfileIndicator = "> "
+	case settingsFieldCodexSandbox:
+		codexSandboxIndicator = "> "
+	case settingsFieldCodexApproval:
+		codexApprovalIndicator = "> "
+	case settingsFieldCodexSearch:
+		codexSearchIndicator = "> "
+	case settingsFieldGeminiModel:
+		geminiModelIndicator = "> "
+	case settingsFieldGeminiSandbox:
+		geminiSandboxIndicator = "> "
+	case settingsFieldGeminiApproval:
+		geminiApprovalIndicator = "> "
+	case settingsFieldVibeAgent:
+		vibeAgentIndicator = "> "
+	case settingsFieldVibeNonInteractive:
+		vibeNonInteractiveIndicator = "> "
+	case settingsFieldVibeAutoApprove:
+		vibeAutoApproveIndicator = "> "
+	case settingsFieldVibeIncludeHistory:
+		vibeIncludeHistoryIndicator = "> "
+	}
+
+	// Vibe checkboxes
+	vibeNonInteractiveCheck := "[ ]"
+	if m.vibeNonInteractive {
+		vibeNonInteractiveCheck = "[x]"
+	}
+
+	vibeAutoApproveCheck := "[ ]"
+	if m.vibeAutoApprove {
+		vibeAutoApproveCheck = "[x]"
+	}
+
+	vibeIncludeHistoryCheck := "[ ]"
+	if m.vibeIncludeHistory {
+		vibeIncludeHistoryCheck = "[x]"
+	}
+
 	lines := []string{
 		headerStyle.Render("Runtime Settings"),
 		"",
@@ -1884,6 +2018,17 @@ func (m model) viewSettings() string {
 		geminiApprovalIndicator + "Approval Mode:",
 		"  " + m.geminiApprovalInput.View(),
 		dimStyle.Render("  default, auto_edit, yolo (blank = default)"),
+		"",
+		headerStyle.Render("Vibe Settings (Mistral Vibe CLI)"),
+		vibeAgentIndicator + "Agent:",
+		"  " + m.vibeAgentInput.View(),
+		dimStyle.Render("  Custom agent config from ~/.vibe/agents/ (blank = default)"),
+		vibeNonInteractiveIndicator + "Non-Interactive: " + vibeNonInteractiveCheck,
+		dimStyle.Render("  Use --prompt flag for non-interactive mode (auto-approves tools)"),
+		vibeAutoApproveIndicator + "Auto-Approve: " + vibeAutoApproveCheck,
+		dimStyle.Render("  Automatically approve tool execution"),
+		vibeIncludeHistoryIndicator + "Include History: " + vibeIncludeHistoryCheck,
+		dimStyle.Render("  Prepend conversation history to prompts"),
 		"",
 		dimStyle.Render("Tab/Shift+Tab to navigate, Enter to apply, Space to toggle"),
 	}
@@ -1985,6 +2130,8 @@ func (m model) viewName() string {
 		return "Send"
 	case tabHistory:
 		return "History"
+	case tabActivity:
+		return "Activity"
 	case tabSettings:
 		return "Settings"
 	default:
@@ -2161,6 +2308,7 @@ func (m *model) setSettingsFocus(active bool) {
 	m.codexApprovalInput.Blur()
 	m.geminiModelInput.Blur()
 	m.geminiApprovalInput.Blur()
+	m.vibeAgentInput.Blur()
 }
 
 func (m *model) updateSettingsFieldFocus() {
@@ -2174,6 +2322,7 @@ func (m *model) updateSettingsFieldFocus() {
 	m.codexApprovalInput.Blur()
 	m.geminiModelInput.Blur()
 	m.geminiApprovalInput.Blur()
+	m.vibeAgentInput.Blur()
 
 	// Focus the selected field
 	switch m.settingsFocusIndex {
@@ -2195,6 +2344,8 @@ func (m *model) updateSettingsFieldFocus() {
 		m.geminiModelInput.Focus()
 	case settingsFieldGeminiApproval:
 		m.geminiApprovalInput.Focus()
+	case settingsFieldVibeAgent:
+		m.vibeAgentInput.Focus()
 		// checkbox fields don't get focus
 	}
 }
@@ -2541,11 +2692,11 @@ func contains(slice []string, value string) bool {
 func (m *model) sendLogLayout() (int, int) {
 	if m.showSendModal {
 		width, height := modalSize(m.width, m.height)
-		inputWidth, _, logHeight, _ := sendModalLayout(width, height)
+		inputWidth, _, logHeight := sendModalLayout(width, height)
 		return inputWidth, logHeight
 	}
 	width, height := m.bodySize()
-	inputWidth, _, logHeight, _ := sendViewLayout(width, height)
+	inputWidth, _, logHeight := sendViewLayout(width, height)
 	return inputWidth, logHeight
 }
 
@@ -2717,7 +2868,7 @@ func fetchStatusCmd(caller *hub.LocalCaller) tea.Cmd {
 			return errMsg{err: err, source: "refresh"}
 		}
 		if resp.Error != nil {
-			return errMsg{err: fmt.Errorf(resp.Error.Message), source: "refresh"}
+			return errMsg{err: errors.New(resp.Error.Message), source: "refresh"}
 		}
 		var status statusData
 		if err := decodeResult(resp.Result, &status); err != nil {
@@ -2735,7 +2886,7 @@ func fetchAgentsCmd(caller *hub.LocalCaller) tea.Cmd {
 			return errMsg{err: err, source: "refresh"}
 		}
 		if resp.Error != nil {
-			return errMsg{err: fmt.Errorf(resp.Error.Message), source: "refresh"}
+			return errMsg{err: errors.New(resp.Error.Message), source: "refresh"}
 		}
 		var agents []agentData
 		if err := decodeResult(resp.Result, &agents); err != nil {
@@ -2753,7 +2904,7 @@ func fetchTasksCmd(caller *hub.LocalCaller) tea.Cmd {
 			return errMsg{err: err, source: "refresh"}
 		}
 		if resp.Error != nil {
-			return errMsg{err: fmt.Errorf(resp.Error.Message), source: "refresh"}
+			return errMsg{err: errors.New(resp.Error.Message), source: "refresh"}
 		}
 		var tasks []types.Task
 		if err := decodeResult(resp.Result, &tasks); err != nil {
@@ -2781,7 +2932,7 @@ func sendCmd(caller *hub.LocalCaller, agent, message string) tea.Cmd {
 			return errMsg{err: err, source: "send"}
 		}
 		if resp.Error != nil {
-			return errMsg{err: fmt.Errorf(resp.Error.Message), source: "send"}
+			return errMsg{err: errors.New(resp.Error.Message), source: "send"}
 		}
 		var task types.Task
 		if err := decodeResult(resp.Result, &task); err == nil {
@@ -2900,7 +3051,7 @@ func sendToAgentCmd(caller *hub.LocalCaller, agentID, taskText string) tea.Cmd {
 			return agentResultMsg{agentID: agentID, err: err}
 		}
 		if resp.Error != nil {
-			return agentResultMsg{agentID: agentID, err: fmt.Errorf(resp.Error.Message)}
+			return agentResultMsg{agentID: agentID, err: errors.New(resp.Error.Message)}
 		}
 		var task types.Task
 		if err := decodeResult(resp.Result, &task); err != nil {

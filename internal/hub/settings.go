@@ -16,6 +16,7 @@ type Settings struct {
 	Claude             types.ClaudeSettings `json:"claude,omitempty"`
 	Codex              types.CodexSettings  `json:"codex,omitempty"`
 	Gemini             types.GeminiSettings `json:"gemini,omitempty"`
+	Vibe               types.VibeSettings   `json:"vibe,omitempty"`
 }
 
 func (s *Server) SettingsPath() string {
@@ -238,5 +239,63 @@ func (s *Server) GetGeminiConfig() types.GeminiConfig {
 		ApprovalMode: s.settings.Gemini.DefaultApprovalMode,
 		AllowedTools: s.settings.Gemini.CustomAllowedTools,
 		Resume:       s.settings.Gemini.ResumeSession,
+	}
+}
+
+// VibeSettings returns the current Vibe configuration
+func (s *Server) VibeSettings() types.VibeSettings {
+	return s.settings.Vibe
+}
+
+// UpdateVibeSettings updates Vibe configuration and persists it
+func (s *Server) UpdateVibeSettings(settings types.VibeSettings) error {
+	s.settings.Vibe = settings
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateVibeAgent updates the default Vibe agent configuration
+func (s *Server) UpdateVibeAgent(agent string) error {
+	s.settings.Vibe.DefaultAgent = agent
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateVibeNonInteractive updates the non-interactive mode toggle
+func (s *Server) UpdateVibeNonInteractive(enabled bool) error {
+	s.settings.Vibe.NonInteractive = enabled
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateVibeAutoApprove updates the auto-approve toggle
+func (s *Server) UpdateVibeAutoApprove(enabled bool) error {
+	s.settings.Vibe.AutoApprove = enabled
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateVibeIncludeHistory updates the include history toggle
+func (s *Server) UpdateVibeIncludeHistory(enabled bool) error {
+	s.settings.Vibe.IncludeHistory = enabled
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// UpdateVibeSystemPrompt updates the default system prompt
+func (s *Server) UpdateVibeSystemPrompt(prompt string) error {
+	s.settings.Vibe.DefaultSystemPrompt = prompt
+	s.applySettingsToAgents()
+	return s.SaveSettings()
+}
+
+// GetVibeConfig builds a VibeConfig from current settings
+func (s *Server) GetVibeConfig() types.VibeConfig {
+	return types.VibeConfig{
+		Agent:          s.settings.Vibe.DefaultAgent,
+		NonInteractive: s.settings.Vibe.NonInteractive,
+		AutoApprove:    s.settings.Vibe.AutoApprove,
+		IncludeHistory: s.settings.Vibe.IncludeHistory,
+		SystemPrompt:   s.settings.Vibe.DefaultSystemPrompt,
 	}
 }
