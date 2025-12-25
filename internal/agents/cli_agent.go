@@ -73,7 +73,7 @@ func (a *CLIAgent) CheckHealth() (types.AgentHealth, error) {
 }
 
 func (a *CLIAgent) Execute(ctx types.ExecutionContext) (types.ExecutionResult, error) {
-	prompt := extractPrompt(ctx.UserMessage)
+	prompt := extractPromptWithHistory(ctx.UserMessage, ctx.PreviousHistory)
 	if prompt == "" {
 		return types.ExecutionResult{}, errors.New("empty prompt")
 	}
@@ -138,7 +138,7 @@ func (a *CLIAgent) Cancel(taskID string) (bool, error) {
 
 // ExecuteStreaming runs the agent with real-time output streaming and interactive input
 func (a *CLIAgent) ExecuteStreaming(ctx types.ExecutionContext, output chan<- types.StreamEvent, input <-chan string) error {
-	prompt := extractPrompt(ctx.UserMessage)
+	prompt := extractPromptWithHistory(ctx.UserMessage, ctx.PreviousHistory)
 	if prompt == "" {
 		output <- types.StreamEvent{Kind: "error", Text: "empty prompt", AgentID: a.ID(), TaskID: ctx.TaskID, Timestamp: time.Now().UTC()}
 		return errors.New("empty prompt")
@@ -232,7 +232,7 @@ func (a *CLIAgent) ExecPath() string {
 
 // ExecuteWithArgs runs the agent with custom arguments (for agent extensions)
 func (a *CLIAgent) ExecuteWithArgs(ctx types.ExecutionContext, customArgs []string) (types.ExecutionResult, error) {
-	prompt := extractPrompt(ctx.UserMessage)
+	prompt := extractPromptWithHistory(ctx.UserMessage, ctx.PreviousHistory)
 	if prompt == "" {
 		return types.ExecutionResult{}, errors.New("empty prompt")
 	}
@@ -293,7 +293,7 @@ func (a *CLIAgent) ExecuteWithArgs(ctx types.ExecutionContext, customArgs []stri
 
 // ExecuteStreamingWithArgs runs the agent with custom arguments and real-time streaming
 func (a *CLIAgent) ExecuteStreamingWithArgs(ctx types.ExecutionContext, customArgs []string, output chan<- types.StreamEvent, input <-chan string) error {
-	prompt := extractPrompt(ctx.UserMessage)
+	prompt := extractPromptWithHistory(ctx.UserMessage, ctx.PreviousHistory)
 	if prompt == "" {
 		output <- types.StreamEvent{Kind: "error", Text: "empty prompt", AgentID: a.ID(), TaskID: ctx.TaskID, Timestamp: time.Now().UTC()}
 		return errors.New("empty prompt")
@@ -389,6 +389,59 @@ func extractPrompt(msg types.Message) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// extractPromptWithHistory builds a prompt that includes conversation history for multi-agent awareness
+func extractPromptWithHistory(msg types.Message, history []types.Message) string {
+	prompt := extractPrompt(msg)
+	if len(history) == 0 {
+		return prompt
+	}
+
+	historyContext := formatCrossAgentHistory(history)
+	if historyContext == "" {
+		return prompt
+	}
+
+	return historyContext + "\n\n---\n\n" + prompt
+}
+
+// formatCrossAgentHistory formats conversation history from multiple agents
+// Format: [role (agentId)]: text
+func formatCrossAgentHistory(history []types.Message) string {
+	if len(history) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== Previous Conversation History ===\n\n")
+
+	for _, msg := range history {
+		role := msg.Role
+		agentID := ""
+
+		// Extract agent ID from metadata if present
+		if msg.Metadata != nil {
+			if id, ok := msg.Metadata["agentId"].(string); ok {
+				agentID = id
+			}
+		}
+
+		// Format the role with agent ID attribution
+		if agentID != "" && role == "agent" {
+			sb.WriteString("[" + role + " (" + agentID + ")]: ")
+		} else {
+			sb.WriteString("[" + role + "]: ")
+		}
+
+		// Extract text from message parts
+		text := extractPrompt(msg)
+		sb.WriteString(text)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("=== End of History ===")
+	return sb.String()
 }
 
 func applyExecutionContext(command *exec.Cmd, ctx types.ExecutionContext) {

@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:a2a-protocol.org)",
+      "Bash(go get:*)",
+      "Bash(go doc:*)",
+      "Bash(go mod tidy:*)"
     ]
   }
 }

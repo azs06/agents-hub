@@ -1,14 +1,22 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"a2a-go/internal/types"
 	"a2a-go/internal/utils"
 )
+
+// RemoteAgentConfig defines configuration for a remote A2A agent
+type RemoteAgentConfig struct {
+	CardURL string `json:"cardUrl"`
+	Alias   string `json:"alias,omitempty"`
+}
 
 type Settings struct {
 	OrchestratorAgents []string             `json:"orchestratorAgents"`
@@ -17,6 +25,7 @@ type Settings struct {
 	Codex              types.CodexSettings  `json:"codex,omitempty"`
 	Gemini             types.GeminiSettings `json:"gemini,omitempty"`
 	Vibe               types.VibeSettings   `json:"vibe,omitempty"`
+	RemoteAgents       []RemoteAgentConfig  `json:"remoteAgents,omitempty"`
 }
 
 func (s *Server) SettingsPath() string {
@@ -45,7 +54,28 @@ func (s *Server) LoadSettings() error {
 		s.settings.OrchestratorAgents = append([]string{}, s.cfg.Orchestrator.Agents...)
 	}
 	_ = s.UpdateOrchestratorAgents(s.cfg.Orchestrator.Agents)
+
+	// Initialize remote agents from saved configuration
+	s.initRemoteAgents()
+
 	return nil
+}
+
+// initRemoteAgents registers all configured remote agents
+func (s *Server) initRemoteAgents() {
+	if len(s.settings.RemoteAgents) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, cfg := range s.settings.RemoteAgents {
+		if err := s.remoteRegistry.DiscoverAndRegister(ctx, cfg.CardURL, cfg.Alias); err != nil {
+			s.logger.Warnf("failed to register remote agent %s: %v", cfg.CardURL, err)
+		} else {
+			s.logger.Debugf("registered remote agent from %s", cfg.CardURL)
+		}
+	}
 }
 
 func (s *Server) SaveSettings() error {
@@ -298,4 +328,36 @@ func (s *Server) GetVibeConfig() types.VibeConfig {
 		IncludeHistory: s.settings.Vibe.IncludeHistory,
 		SystemPrompt:   s.settings.Vibe.DefaultSystemPrompt,
 	}
+}
+
+// RemoteAgentSettings returns the current remote agent configurations
+func (s *Server) RemoteAgentSettings() []RemoteAgentConfig {
+	return s.settings.RemoteAgents
+}
+
+// AddRemoteAgent adds a remote agent configuration and persists it
+func (s *Server) AddRemoteAgent(cardURL, alias string) error {
+	// Check if already exists
+	for _, existing := range s.settings.RemoteAgents {
+		if existing.CardURL == cardURL {
+			return nil // Already exists
+		}
+	}
+	s.settings.RemoteAgents = append(s.settings.RemoteAgents, RemoteAgentConfig{
+		CardURL: cardURL,
+		Alias:   alias,
+	})
+	return s.SaveSettings()
+}
+
+// RemoveRemoteAgent removes a remote agent configuration by card URL
+func (s *Server) RemoveRemoteAgent(cardURL string) error {
+	newList := make([]RemoteAgentConfig, 0, len(s.settings.RemoteAgents))
+	for _, cfg := range s.settings.RemoteAgents {
+		if cfg.CardURL != cardURL {
+			newList = append(newList, cfg)
+		}
+	}
+	s.settings.RemoteAgents = newList
+	return s.SaveSettings()
 }

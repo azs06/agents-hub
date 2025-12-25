@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"a2a-go/internal/a2a"
 	"a2a-go/internal/hub"
 	"a2a-go/internal/jsonrpc"
 	"a2a-go/internal/utils"
@@ -27,12 +28,24 @@ func NewHTTPTransport(cfg hub.Config, server *hub.Server, logger *utils.Logger) 
 
 func (t *HTTPTransport) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
+
+	// Original JSON-RPC endpoint (for backwards compatibility)
 	mux.HandleFunc("/", t.handleRPC)
 	mux.HandleFunc("/health", t.handleHealth)
 	mux.HandleFunc("/.well-known/agent.json", t.handleHubCard)
 	mux.HandleFunc("/.well-known/agents", t.handleAgents)
 	mux.HandleFunc("/.well-known/agents/", t.handleAgent)
 	mux.HandleFunc("/stream", t.handleStream)
+
+	// Register A2A protocol routes
+	baseURL := fmt.Sprintf("http://%s:%d", t.cfg.HTTP.Host, t.cfg.HTTP.Port)
+	a2aServer, err := a2a.NewA2AServer(t.server, baseURL)
+	if err != nil {
+		t.logger.Warnf("failed to create A2A server: %v", err)
+	} else {
+		a2aServer.RegisterRoutes(mux)
+		t.logger.Debugf("A2A protocol enabled at /a2a")
+	}
 
 	addr := fmt.Sprintf("%s:%d", t.cfg.HTTP.Host, t.cfg.HTTP.Port)
 	t.http = &http.Server{Addr: addr, Handler: mux}

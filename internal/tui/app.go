@@ -35,6 +35,7 @@ const (
 	tabSend
 	tabHistory
 	tabActivity
+	tabSessions
 	tabSettings
 	tabCount
 )
@@ -68,12 +69,16 @@ var (
 	confirmStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	inputBackground = lipgloss.AdaptiveColor{Light: "252", Dark: "236"}
 	accentColor     = lipgloss.Color("39") // Cyan/blue accent
+	lightGreen      = lipgloss.Color("120")
 	msgBoxStyle     = lipgloss.NewStyle().
-			Border(lipgloss.ThickBorder(), false, false, false, true).
-			BorderForeground(accentColor).
-			Background(inputBackground).
-			PaddingLeft(1)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lightGreen).
+			Padding(0, 1)
 )
+
+// Simple logo text
+const logoAgentsText = "agents"
+const logoHubText = "hub"
 
 type statusData struct {
 	Version     string `json:"version"`
@@ -125,9 +130,10 @@ type model struct {
 	detailViewport  viewport.Model
 	keys            keyMap
 	help            help.Model
-	showHelp        bool
-	commandMode     bool
-	commandInput    textinput.Model
+	showHelp               bool
+	commandMode            bool
+	commandModeFromWelcome bool // track if command mode was entered from welcome screen
+	commandInput           textinput.Model
 	commandHistory  []string
 	historyIndex    int
 	commandIndex    int
@@ -189,6 +195,20 @@ type model struct {
 	streamBuffer   map[string][]string     // agentID -> buffered output lines
 	focusedAgent   string                  // Which agent has input focus
 	pendingPrompts []string                // Queue of agents waiting for input
+
+	// Session management
+	currentSessionID string
+	sessions         []*hub.Session
+	sessionsList     list.Model
+	sessionIndex     int
+
+	// Agent picker
+	showAgentPicker    bool
+	agentPickerIndex   int
+	agentPickerOptions []string
+
+	// Welcome screen
+	showWelcome bool
 }
 
 // AgentStream holds the channels for streaming communication with an agent
@@ -278,18 +298,8 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	msgInput := textarea.New()
 	msgInput.Placeholder = "message"
 	msgInput.Focus()
-	msgInput.Prompt = ""
+	msgInput.Prompt = "> "
 	msgInput.ShowLineNumbers = false
-	msgInput.FocusedStyle.Base = msgInput.FocusedStyle.Base.Background(inputBackground)
-	msgInput.BlurredStyle.Base = msgInput.BlurredStyle.Base.Background(inputBackground)
-	msgInput.FocusedStyle.CursorLine = msgInput.FocusedStyle.CursorLine.Background(inputBackground)
-	msgInput.BlurredStyle.CursorLine = msgInput.BlurredStyle.CursorLine.Background(inputBackground)
-	msgInput.FocusedStyle.Text = msgInput.FocusedStyle.Text.Background(inputBackground)
-	msgInput.BlurredStyle.Text = msgInput.BlurredStyle.Text.Background(inputBackground)
-	msgInput.FocusedStyle.Placeholder = msgInput.FocusedStyle.Placeholder.Background(inputBackground)
-	msgInput.BlurredStyle.Placeholder = msgInput.BlurredStyle.Placeholder.Background(inputBackground)
-	msgInput.FocusedStyle.EndOfBuffer = msgInput.FocusedStyle.EndOfBuffer.Background(inputBackground)
-	msgInput.BlurredStyle.EndOfBuffer = msgInput.BlurredStyle.EndOfBuffer.Background(inputBackground)
 	commandInput := textinput.New()
 	commandInput.Placeholder = "command"
 	commandInput.Prompt = "/ "
@@ -356,9 +366,19 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	agentsList := newListModel()
 	tasksList := newListModel()
 	responsesList := newListModel()
+	sessionsList := newListModel()
 	detailViewport := viewport.New(0, 0)
 	logViewport := viewport.New(0, 6)
 	sendViewport := viewport.New(0, 0)
+
+	// Create a new session for this TUI instance
+	currentSession, err := server.Sessions().Create()
+	currentSessionID := ""
+	if err != nil {
+		logger.Warnf("failed to create session: %v", err)
+	} else {
+		currentSessionID = currentSession.ID
+	}
 
 	m := model{
 		cfg:                cfg,
@@ -408,21 +428,25 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 		vibeAutoApprove:    vibeSettings.AutoApprove,
 		vibeIncludeHistory: vibeSettings.IncludeHistory,
 		settingsFocusIndex: 0,
-		showSendModal:      true,
+		showSendModal:      false,
+		showWelcome:        true,
 		activeAgents:       make(map[string]string),
 		agentProgress:      make(map[string]string),
 		streamChannels:     make(map[string]*AgentStream),
 		streamBuffer:       make(map[string][]string),
 		pendingPrompts:     []string{},
+		currentSessionID:   currentSessionID,
+		sessions:           server.Sessions().List(),
+		sessionsList:       sessionsList,
 	}
 	m.updateMessagePrompt()
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := p.Run()
+	_, runErr := p.Run()
 	server.Registry().Stop()
 	server.RemovePid()
 	cancel()
-	return err
+	return runErr
 }
 
 func (m model) Init() tea.Cmd {
@@ -451,7 +475,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasksList.SetItems(buildTaskItems(m.tasks))
 		m.finishRefresh()
 		m.updateDetailForTab(tabTasks)
-		m.seedSendLogFromTasks()
+		// Don't auto-load previous logs - sessions handle this now
 	case errMsg:
 		m.errMsg = msg.err.Error()
 		m.sending = false
@@ -571,6 +595,86 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.KeyMsg:
+		// Debug: log all key presses
+		if msg.String() == "esc" {
+			m.addLog("debug", fmt.Sprintf("KEY: esc, showWelcome=%v, commandMode=%v, commandModeFromWelcome=%v", m.showWelcome, m.commandMode, m.commandModeFromWelcome))
+		}
+		// Global agent picker handler - works in all views
+		if m.showAgentPicker {
+			switch msg.String() {
+			case "up", "k":
+				if m.agentPickerIndex > 0 {
+					m.agentPickerIndex--
+				}
+				return m, nil
+			case "down", "j":
+				if m.agentPickerIndex < len(m.agentPickerOptions)-1 {
+					m.agentPickerIndex++
+				}
+				return m, nil
+			case "enter":
+				if len(m.agentPickerOptions) > 0 {
+					m.agentInput.SetValue(m.agentPickerOptions[m.agentPickerIndex])
+					m.server.UpdateLastAgent(m.agentPickerOptions[m.agentPickerIndex])
+				}
+				m.showAgentPicker = false
+				return m, nil
+			case "esc":
+				m.showAgentPicker = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Handle welcome screen interactions
+		if m.showWelcome && !m.commandMode {
+			switch msg.String() {
+				case "esc":
+				// Exit welcome, enter command mode
+				m.showWelcome = false
+				m.showSendModal = true
+				m.commandMode = true
+				m.commandInput.Focus()
+				m.historyIndex = len(m.commandHistory)
+				m.commandIndex = 0
+				m.updateCommandResults()
+				return m, nil
+			case "/":
+				if strings.TrimSpace(m.msgInput.Value()) == "" {
+					// Exit welcome, enter command mode
+					m.showWelcome = false
+					m.showSendModal = true
+					m.commandMode = true
+					m.commandModeFromWelcome = true // remember we came from welcome screen
+					m.commandInput.Focus()
+					m.historyIndex = len(m.commandHistory)
+					m.commandIndex = 0
+					m.updateCommandResults()
+					return m, nil
+				}
+			case "enter":
+				// Send message and exit welcome
+				text := strings.TrimSpace(m.msgInput.Value())
+				if text != "" {
+					m.showWelcome = false
+					m.showSendModal = true
+					return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
+				}
+				return m, nil
+			case "shift+a", "A":
+				// Open agent picker
+				m.showAgentPicker = true
+				m.agentPickerIndex = 0
+				m.agentPickerOptions = m.getAgentIDs()
+				return m, nil
+			case "ctrl+c":
+				return m, tea.Quit
+			}
+			// Pass other keys to message input
+			m.msgInput, _ = m.msgInput.Update(msg)
+			return m, nil
+		}
+
 		if msg.String() == "esc" && !m.commandMode {
 			if m.confirmQuit {
 				m.confirmQuit = false
@@ -644,17 +748,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.syncSendViewport()
 					return m, nil
 				}
-				// Normal tab behavior: switch between agent input and message input
-				if m.focusIndex == 0 {
-					m.server.UpdateLastAgent(m.agentInput.Value())
-					m.focusIndex = 1
-					m.agentInput.Blur()
-					m.msgInput.Focus()
-				} else {
-					m.focusIndex = 0
-					m.msgInput.Blur()
-					m.agentInput.Focus()
-				}
+				// Tab does nothing in normal mode - use shift+A to switch agents
 				return m, nil
 			case "up", "down":
 				if m.focusIndex != 1 || strings.TrimSpace(m.msgInput.Value()) == "" {
@@ -693,6 +787,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "ctrl+s", "ctrl+enter", "alt+enter":
 				return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
+			case "shift+a", "A":
+				// Open agent picker
+				m.showAgentPicker = true
+				m.agentPickerIndex = 0
+				m.agentPickerOptions = m.getAgentIDs()
+				return m, nil
 			}
 			var cmd tea.Cmd
 			m.agentInput, cmd = m.agentInput.Update(msg)
@@ -701,18 +801,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.commandMode {
 			switch msg.String() {
-			case "esc":
+				case "esc":
+				m.addLog("debug", fmt.Sprintf("ESC in command mode: commandModeFromWelcome=%v", m.commandModeFromWelcome))
 				m.commandMode = false
 				m.commandInput.Blur()
 				m.commandInput.SetValue("")
 				m.historyIndex = len(m.commandHistory)
 				m.commandIndex = 0
-				m.activeTab = tabSend
-				m.showSendModal = true
-				m.focusIndex = 1
-				m.agentInput.Blur()
-				m.msgInput.Focus()
-				m.syncSendViewport()
+
+				if m.commandModeFromWelcome {
+					// Came from "/" on welcome - go back to welcome
+					m.showWelcome = true
+					m.showSendModal = false
+					m.commandModeFromWelcome = false
+					m.msgInput.Focus()
+					m.addLog("debug", "Returning to welcome screen")
+				} else {
+					// Came from ESC on welcome or other - go to send view
+					m.activeTab = tabSend
+					m.showSendModal = true
+					m.showWelcome = false
+					m.focusIndex = 1
+					m.agentInput.Blur()
+					m.msgInput.Focus()
+					m.syncSendViewport()
+					m.addLog("debug", "Going to Send tab")
+				}
 				return m, nil
 			case "enter":
 				cmdText := strings.TrimSpace(m.commandInput.Value())
@@ -1032,6 +1146,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
+	// Show welcome screen if enabled
+	if m.showWelcome {
+		base := m.viewWelcome()
+		// Handle agent picker overlay on welcome screen
+		if m.showAgentPicker {
+			pickerWidth := 40
+			if m.width > 0 && m.width/2 > pickerWidth {
+				pickerWidth = m.width / 2
+			}
+			return overlayModal(dimStyle.Render(base), m.renderAgentPicker(pickerWidth), m.width, m.height)
+		}
+		// Handle command mode overlay on welcome screen
+		if m.commandMode {
+			return overlayModal(dimStyle.Render(base), m.renderCommandModal(), m.width, m.height)
+		}
+		return base
+	}
+
 	header := headerStyle.Render("A2A Hub")
 	statusBar := m.renderStatusBar()
 	viewLine := dimStyle.Render("View: " + m.viewName())
@@ -1061,6 +1193,8 @@ func (m model) View() string {
 		body = m.viewHistory()
 	case tabActivity:
 		body = m.viewActivity()
+	case tabSessions:
+		body = m.viewSessions()
 	case tabSettings:
 		body = m.viewSettings()
 	}
@@ -1085,6 +1219,14 @@ func (m model) View() string {
 	base := renderCentered(content, m.width, m.height)
 	if m.showSendModal {
 		base = overlayModal(dimStyle.Render(base), m.renderSendModal(), m.width, m.height)
+	}
+	// Handle agent picker overlay (centered like command mode)
+	if m.showAgentPicker {
+		pickerWidth := 40
+		if m.width > 0 && m.width/2 > pickerWidth {
+			pickerWidth = m.width / 2
+		}
+		return overlayModal(dimStyle.Render(base), m.renderAgentPicker(pickerWidth), m.width, m.height)
 	}
 	if m.commandMode {
 		return overlayModal(dimStyle.Render(base), m.renderCommandModal(), m.width, m.height)
@@ -1131,6 +1273,42 @@ func (m *model) applyCommand(input string) tea.Cmd {
 		m.showSendModal = false
 		m.setSettingsFocus(false)
 		return refreshAllCmd(m.caller)
+	case "sessions":
+		m.activeTab = tabSessions
+		m.showSendModal = false
+		m.setSettingsFocus(false)
+		m.sessions = m.server.Sessions().List()
+		return nil
+	case "load":
+		if len(parts) >= 2 {
+			sessionID := parts[1]
+			// Try to find session by short ID or full ID
+			var targetSession *hub.Session
+			for _, s := range m.server.Sessions().List() {
+				if s.ID == sessionID || s.ShortID() == sessionID {
+					targetSession = s
+					break
+				}
+			}
+			if targetSession != nil {
+				m.loadSession(targetSession)
+				m.activeTab = tabSend
+				m.showSendModal = true
+				m.focusIndex = 1
+				m.agentInput.Blur()
+				m.msgInput.Focus()
+				m.syncSendViewport()
+				return nil
+			}
+			m.errMsg = "Session not found: " + sessionID
+			return nil
+		}
+		// Show sessions tab if no ID provided
+		m.activeTab = tabSessions
+		m.showSendModal = false
+		m.setSettingsFocus(false)
+		m.sessions = m.server.Sessions().List()
+		return nil
 	case "settings":
 		m.activeTab = tabSettings
 		m.showSendModal = false
@@ -1437,6 +1615,8 @@ var commandCatalog = []commandSpec{
 	{Name: "tasks", Usage: "/tasks", Description: "show tasks list"},
 	{Name: "history", Usage: "/history", Description: "show response history"},
 	{Name: "activity", Usage: "/activity", Description: "show task activity"},
+	{Name: "sessions", Usage: "/sessions", Description: "show session history"},
+	{Name: "load", Usage: "/load <id>", Description: "load a session"},
 	{Name: "settings", Usage: "/settings", Description: "show runtime settings"},
 	{Name: "send", Usage: "/send <agent> <msg>", Description: "send a message"},
 	{Name: "agent", Usage: "/agent <id>", Description: "set agent in Send tab"},
@@ -1694,15 +1874,23 @@ func (m model) viewSend() string {
 	m.msgInput.SetWidth(inputWidth - 4)
 	m.msgInput.SetHeight(msgHeight)
 	log := m.renderSendLog(inputWidth, logHeight)
-	msgBox := msgBoxStyle.Width(inputWidth).Render(m.msgInput.View())
-	agentLabel := lipgloss.NewStyle().Foreground(accentColor).Render(m.agentInput.Value())
-	helpText := dimStyle.Render("tab switch agent  ctrl+p commands  enter send")
+
+	// Render the textarea with full-width background
+	textareaView := m.msgInput.View()
+	// Pad each line to fill the width
+	textareaView = m.padTextareaLines(textareaView, inputWidth-4)
+	msgBox := msgBoxStyle.Width(inputWidth).Render(textareaView)
+
+	agentLabel := lipgloss.NewStyle().Foreground(lightGreen).Render(m.agentInput.Value())
+	helpText := dimStyle.Render("shift+A agents  ctrl+p commands  enter send")
+
 	lines := []string{
+		log,
 		msgBox,
 		agentLabel,
-		log,
 		helpText,
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -1714,17 +1902,24 @@ func (m model) renderSendModal() string {
 	m.msgInput.SetWidth(inputWidth - 4)
 	m.msgInput.SetHeight(msgHeight)
 	log := m.renderSendLog(inputWidth, logHeight)
-	msgBox := msgBoxStyle.Width(inputWidth).Render(m.msgInput.View())
-	agentLabel := lipgloss.NewStyle().Foreground(accentColor).Render(m.agentInput.Value())
-	helpText := dimStyle.Render("tab switch agent  ctrl+p commands  enter send  esc close")
+
+	// Render the textarea with full-width background
+	textareaView := m.msgInput.View()
+	textareaView = m.padTextareaLines(textareaView, inputWidth-4)
+	msgBox := msgBoxStyle.Width(inputWidth).Render(textareaView)
+
+	agentLabel := lipgloss.NewStyle().Foreground(lightGreen).Render(m.agentInput.Value())
+	helpText := dimStyle.Render("shift+A agents  ctrl+p commands  enter send  esc close")
 
 	title := headerStyle.Render("Send Message")
-	body := strings.Join([]string{
+	bodyLines := []string{
+		log,
 		msgBox,
 		agentLabel,
-		log,
 		helpText,
-	}, "\n")
+	}
+
+	body := strings.Join(bodyLines, "\n")
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(1, 2).
@@ -1736,6 +1931,46 @@ func (m model) renderSendModal() string {
 
 func modalSize(width, height int) (int, int) {
 	return panelSize(width, height)
+}
+
+// padTextareaLines pads each line of the textarea to fill the width with background
+func (m model) padTextareaLines(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	paddedLines := make([]string, len(lines))
+
+	for i, line := range lines {
+		// Get the visible width of the line (accounting for ANSI codes)
+		visibleWidth := lipgloss.Width(line)
+		if visibleWidth < width {
+			padding := strings.Repeat(" ", width-visibleWidth)
+			paddedLines[i] = line + padding
+		} else {
+			paddedLines[i] = line
+		}
+	}
+	return strings.Join(paddedLines, "\n")
+}
+
+// renderAgentPicker renders the agent selection list
+func (m model) renderAgentPicker(width int) string {
+	if len(m.agentPickerOptions) == 0 {
+		return dimStyle.Render("No agents available")
+	}
+
+	lines := []string{headerStyle.Render("Select Agent:")}
+	for i, agent := range m.agentPickerOptions {
+		prefix := "  "
+		if i == m.agentPickerIndex {
+			prefix = "> "
+		}
+		line := prefix + agent
+		if i == m.agentPickerIndex {
+			line = lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(line)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "", dimStyle.Render("↑/↓ navigate  enter select  esc cancel"))
+	return strings.Join(lines, "\n")
 }
 
 func contentSize(width, height int) (int, int) {
@@ -1852,6 +2087,186 @@ func (m model) viewActivity() string {
 		height = 20
 	}
 	return m.renderTaskActivity(width, height)
+}
+
+// renderLogo renders the two-tone "agents hub" styled logo
+func renderLogo() string {
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true)
+	brightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
+
+	return dimStyle.Render(logoAgentsText) + brightStyle.Render(logoHubText)
+}
+
+// viewWelcome renders the welcome screen with logo and message input
+func (m model) viewWelcome() string {
+	// Get terminal dimensions
+	width := m.width
+	height := m.height
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 24
+	}
+
+	// Render the logo
+	logo := renderLogo()
+	logoLines := strings.Split(logo, "\n")
+	logoHeight := len(logoLines)
+
+	// Message input box - simple style for welcome screen
+	msgWidth := 50
+	if msgWidth > width-10 {
+		msgWidth = width - 10
+	}
+
+	// Light green color for welcome screen
+	lightGreen := lipgloss.Color("120")
+
+	// Build input content manually (cleaner than textarea for welcome)
+	inputContent := m.msgInput.Value()
+	cursorStyle := lipgloss.NewStyle().Reverse(true)
+	if inputContent == "" {
+		// Show placeholder with cursor
+		inputContent = "> " + cursorStyle.Render(" ") + dimStyle.Render("message")
+	} else {
+		// Show content with cursor at end
+		inputContent = "> " + inputContent + cursorStyle.Render(" ")
+	}
+
+	// Pad to fill width
+	contentWidth := lipgloss.Width(inputContent)
+	if contentWidth < msgWidth-4 {
+		inputContent += strings.Repeat(" ", msgWidth-4-contentWidth)
+	}
+
+	// Simple box style with rounded border in light green
+	welcomeBoxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lightGreen).
+		Padding(0, 1)
+
+	msgBox := welcomeBoxStyle.Render(inputContent)
+
+	// Agent label (in light green to match)
+	agentLabel := lipgloss.NewStyle().Foreground(lightGreen).Render(m.agentInput.Value())
+
+	// Help text
+	helpText := dimStyle.Render("shift+A agents   / commands")
+
+	// Calculate vertical centering
+	contentHeight := logoHeight + 3 + 3 + 1 + 1 // logo + spacing + msgbox + agent + help
+	topPadding := (height - contentHeight) / 2
+	if topPadding < 0 {
+		topPadding = 0
+	}
+
+	// Build the view
+	var lines []string
+
+	// Top padding
+	for i := 0; i < topPadding; i++ {
+		lines = append(lines, "")
+	}
+
+	// Logo (centered)
+	for _, line := range logoLines {
+		lineWidth := lipgloss.Width(line)
+		leftPad := (width - lineWidth) / 2
+		if leftPad < 0 {
+			leftPad = 0
+		}
+		lines = append(lines, strings.Repeat(" ", leftPad)+line)
+	}
+
+	// Spacing
+	lines = append(lines, "")
+	lines = append(lines, "")
+
+	// Message box (centered) - must center each line of the box
+	msgBoxWidth := lipgloss.Width(msgBox)
+	msgLeftPad := (width - msgBoxWidth) / 2
+	if msgLeftPad < 0 {
+		msgLeftPad = 0
+	}
+	// Split msgBox by lines and add padding to each line
+	for _, boxLine := range strings.Split(msgBox, "\n") {
+		lines = append(lines, strings.Repeat(" ", msgLeftPad)+boxLine)
+	}
+
+	// Agent label (centered under message box)
+	agentWidth := lipgloss.Width(agentLabel)
+	agentLeftPad := (width - agentWidth) / 2
+	if agentLeftPad < 0 {
+		agentLeftPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", agentLeftPad)+agentLabel)
+
+	// Spacing
+	lines = append(lines, "")
+
+	// Help text (centered)
+	helpWidth := lipgloss.Width(helpText)
+	helpLeftPad := (width - helpWidth) / 2
+	if helpLeftPad < 0 {
+		helpLeftPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", helpLeftPad)+helpText)
+
+	return strings.Join(lines, "\n")
+}
+
+func (m model) viewSessions() string {
+	width, height := m.bodySize()
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 20
+	}
+
+	if len(m.sessions) == 0 {
+		return dimStyle.Render("No sessions yet.")
+	}
+
+	var lines []string
+	currentLabel := ""
+	if m.currentSessionID != "" {
+		session := m.server.Sessions().Get(m.currentSessionID)
+		if session != nil {
+			currentLabel = fmt.Sprintf("Current: %s (started %s)", session.ShortID(), session.CreatedAt.Format("Jan 2 15:04"))
+		}
+	}
+	if currentLabel != "" {
+		lines = append(lines, headerStyle.Render(currentLabel))
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, headerStyle.Render("Sessions:"))
+	lines = append(lines, "")
+
+	for i, session := range m.sessions {
+		if i >= height-6 {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("... and %d more", len(m.sessions)-i)))
+			break
+		}
+		prefix := "  "
+		if session.ID == m.currentSessionID {
+			prefix = "> "
+		}
+		timeStr := session.UpdatedAt.Format("Jan 2 15:04")
+		entryCount := len(session.Entries)
+		line := fmt.Sprintf("%s%s  %s  (%d messages)", prefix, session.ShortID(), timeStr, entryCount)
+		if session.ID == m.currentSessionID {
+			line = lipgloss.NewStyle().Foreground(accentColor).Render(line)
+		}
+		lines = append(lines, line)
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("/load <id> to load a session"))
+
+	return strings.Join(lines, "\n")
 }
 
 func (m model) viewSettings() string {
@@ -2132,6 +2547,8 @@ func (m model) viewName() string {
 		return "History"
 	case tabActivity:
 		return "Activity"
+	case tabSessions:
+		return "Sessions"
 	case tabSettings:
 		return "Settings"
 	default:
@@ -2351,9 +2768,9 @@ func (m *model) updateSettingsFieldFocus() {
 }
 
 func (m *model) updateMessagePrompt() {
-	m.msgInput.Prompt = ""
+	m.msgInput.Prompt = "> "
 	m.msgInput.SetPromptFunc(0, func(_ int) string {
-		return ""
+		return "> "
 	})
 }
 
@@ -2399,7 +2816,7 @@ func (m *model) startSend(agent, message string) tea.Cmd {
 	// Start streaming execution in background
 	return tea.Batch(
 		m.spinner.Tick,
-		startStreamingCmd(m.server, agent, message, stream),
+		startStreamingCmd(m.server, agent, message, m.currentContextID(), stream),
 		listenAgentStream(agent, stream.Output),
 	)
 }
@@ -2432,6 +2849,8 @@ func (m *model) startMultiAgentSend(mentions map[string]string) tea.Cmd {
 	m.msgInput.CursorEnd()
 
 	// Create batch of commands - one per agent with streaming
+	// All agents share the same context for cross-agent history
+	contextID := m.currentContextID()
 	cmds := []tea.Cmd{m.spinner.Tick}
 	for agentID, task := range mentions {
 		stream := &AgentStream{
@@ -2440,7 +2859,7 @@ func (m *model) startMultiAgentSend(mentions map[string]string) tea.Cmd {
 			Done:   false,
 		}
 		m.streamChannels[agentID] = stream
-		cmds = append(cmds, startStreamingCmd(m.server, agentID, task, stream))
+		cmds = append(cmds, startStreamingCmd(m.server, agentID, task, contextID, stream))
 		cmds = append(cmds, listenAgentStream(agentID, stream.Output))
 	}
 	return tea.Batch(cmds...)
@@ -2451,13 +2870,63 @@ func (m *model) appendSendEntry(role, agent, text string) {
 	if text == "" {
 		return
 	}
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 	m.sendLog = append(m.sendLog, sendEntry{
 		Role:      role,
 		Agent:     agent,
 		Text:      text,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: timestamp,
 	})
 	m.syncSendViewport()
+
+	// Save to current session
+	if m.currentSessionID != "" {
+		entry := hub.SessionEntry{
+			Role:      role,
+			Agent:     agent,
+			Text:      text,
+			Timestamp: timestamp,
+		}
+		_ = m.server.Sessions().AddEntry(m.currentSessionID, entry)
+	}
+}
+
+// loadSession loads a session's entries into the send log
+func (m *model) loadSession(session *hub.Session) {
+	m.sendLog = nil
+	for _, entry := range session.Entries {
+		m.sendLog = append(m.sendLog, sendEntry{
+			Role:      entry.Role,
+			Agent:     entry.Agent,
+			Text:      entry.Text,
+			Timestamp: entry.Timestamp,
+		})
+	}
+	m.currentSessionID = session.ID
+	m.syncSendViewport()
+}
+
+// currentContextID returns the context ID for the current session
+// This ensures all agents in the same session share the same context
+func (m *model) currentContextID() string {
+	if m.currentSessionID == "" {
+		return utils.NewID("ctx") // fallback for no session
+	}
+	session := m.server.Sessions().Get(m.currentSessionID)
+	if session == nil {
+		return utils.NewID("ctx") // fallback if session not found
+	}
+	return session.ContextID
+}
+
+// getAgentIDs returns a list of available agent IDs
+func (m *model) getAgentIDs() []string {
+	agents := m.server.AgentsList()
+	ids := make([]string, 0, len(agents))
+	for _, a := range agents {
+		ids = append(ids, a.Agent.ID())
+	}
+	return ids
 }
 
 // appendStreamLine adds a line to an agent's streaming buffer and updates the display
@@ -2914,13 +3383,14 @@ func fetchTasksCmd(caller *hub.LocalCaller) tea.Cmd {
 	}
 }
 
-func sendCmd(caller *hub.LocalCaller, agent, message string) tea.Cmd {
+func sendCmd(caller *hub.LocalCaller, agent, message, contextID string) tea.Cmd {
 	return func() tea.Msg {
 		msg := types.Message{
 			Kind:      "message",
 			MessageID: utils.NewID("msg"),
 			Role:      "user",
 			Parts:     []types.Part{{Kind: "text", Text: message}},
+			ContextID: contextID, // share context across agents in the same session
 			Metadata:  map[string]any{"targetAgent": agent},
 		}
 		params, _ := json.Marshal(map[string]any{
@@ -2978,13 +3448,39 @@ func tickCmd() tea.Cmd {
 
 // parseMentions parses @agent mentions from text
 // Single agent: "@vibe say something to @gemini" -> {"vibe": "say something to @gemini"}
+// Broadcast: "@claude @gemini fix this" -> {"claude": "fix this", "gemini": "fix this"}
 // Multi-agent: "@claude write API, @gemini write UI" -> {"claude": "write API", "gemini": "write UI"}
 // Multi-agent: "@claude task1 and @gemini task2" -> {"claude": "task1", "gemini": "task2"}
 func parseMentions(text string) map[string]string {
 	text = strings.TrimSpace(text)
 	result := make(map[string]string)
 
-	// First, check if this is a simple single-agent message: @agent <message>
+	// Broadcast pattern: @agent1 @agent2 ... message (same message to multiple agents)
+	// Pattern matches one or more @mentions followed by non-@mention text
+	broadcastPattern := regexp.MustCompile(`^((?:@\w+\s+)+)([^@].*)$`)
+	if match := broadcastPattern.FindStringSubmatch(text); len(match) == 3 {
+		agentsPart := match[1]
+		message := strings.TrimSpace(match[2])
+
+		// Extract all agent IDs from the agents part
+		agentMatches := regexp.MustCompile(`@(\w+)`).FindAllStringSubmatch(agentsPart, -1)
+		if len(agentMatches) > 1 && message != "" {
+			// Multiple agents with shared message (broadcast)
+			for _, a := range agentMatches {
+				result[strings.ToLower(a[1])] = message
+			}
+			return result
+		}
+	}
+
+	// Check for consecutive @mentions with no message (e.g., "@a @b" or "@a @b @c")
+	// Return empty map - no action without a message
+	onlyMentionsPattern := regexp.MustCompile(`^(?:@\w+\s*)+$`)
+	if onlyMentionsPattern.MatchString(text) {
+		return result
+	}
+
+	// Single agent pattern: @agent <message>
 	singlePattern := regexp.MustCompile(`^@(\w+)\s+(.+)$`)
 	if match := singlePattern.FindStringSubmatch(text); len(match) == 3 {
 		agentID := strings.ToLower(match[1])
@@ -3033,13 +3529,14 @@ func formatMentionsSummary(mentions map[string]string) string {
 }
 
 // sendToAgentCmd creates a command that sends a task to a specific agent (non-streaming fallback)
-func sendToAgentCmd(caller *hub.LocalCaller, agentID, taskText string) tea.Cmd {
+func sendToAgentCmd(caller *hub.LocalCaller, agentID, taskText, contextID string) tea.Cmd {
 	return func() tea.Msg {
 		msg := types.Message{
 			Kind:      "message",
 			MessageID: utils.NewID("msg"),
 			Role:      "user",
 			Parts:     []types.Part{{Kind: "text", Text: taskText}},
+			ContextID: contextID, // share context across agents in the same session
 			Metadata:  map[string]any{"targetAgent": agentID},
 		}
 		params, _ := json.Marshal(map[string]any{
@@ -3062,7 +3559,7 @@ func sendToAgentCmd(caller *hub.LocalCaller, agentID, taskText string) tea.Cmd {
 }
 
 // startStreamingCmd starts a streaming execution for an agent
-func startStreamingCmd(server *hub.Server, agentID, message string, stream *AgentStream) tea.Cmd {
+func startStreamingCmd(server *hub.Server, agentID, message, contextID string, stream *AgentStream) tea.Cmd {
 	return func() tea.Msg {
 		info, ok := server.Registry().Get(agentID)
 		if !ok {
@@ -3074,7 +3571,7 @@ func startStreamingCmd(server *hub.Server, agentID, message string, stream *Agen
 		workingDir, _ := os.Getwd()
 		ctx := types.ExecutionContext{
 			TaskID:      utils.NewID("task"),
-			ContextID:   utils.NewID("ctx"),
+			ContextID:   contextID, // use shared context for cross-agent history
 			UserMessage: types.Message{Kind: "message", Role: "user", Parts: []types.Part{{Kind: "text", Text: message}}},
 			WorkingDir:  workingDir,
 		}

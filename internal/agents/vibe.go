@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"fmt"
 	"strings"
 
 	"a2a-go/internal/types"
@@ -54,17 +53,16 @@ func (a *VibeAgent) SetDefaultConfig(config types.VibeConfig) {
 func (a *VibeAgent) Execute(ctx types.ExecutionContext) (types.ExecutionResult, error) {
 	config := a.extractVibeConfig(ctx)
 	ctx = a.withVibePrompt(ctx, config)
+	// Clear PreviousHistory since withVibePrompt already incorporated it if IncludeHistory was set
+	// This prevents the base ExecuteWithArgs from adding history again
+	ctx.PreviousHistory = nil
 	args := a.buildArgs(config)
 	return a.CLIAgent.ExecuteWithArgs(ctx, args)
 }
 
-// ExecuteStreaming runs Vibe with streaming and dynamic arguments
-func (a *VibeAgent) ExecuteStreaming(ctx types.ExecutionContext, output chan<- types.StreamEvent, input <-chan string) error {
-	config := a.extractVibeConfig(ctx)
-	ctx = a.withVibePrompt(ctx, config)
-	args := a.buildArgs(config)
-	return a.CLIAgent.ExecuteStreamingWithArgs(ctx, args, output, input)
-}
+// Note: ExecuteStreaming is intentionally NOT implemented for VibeAgent.
+// Vibe's TUI conflicts with agents-hub TUI when run via PTY.
+// The TUI will fall back to regular Execute() which uses stdin pipe.
 
 // extractVibeConfig gets VibeConfig from execution context metadata or defaults
 func (a *VibeAgent) extractVibeConfig(ctx types.ExecutionContext) types.VibeConfig {
@@ -129,8 +127,9 @@ func (a *VibeAgent) buildPrompt(ctx types.ExecutionContext, config types.VibeCon
 		sections = append(sections, "SYSTEM:\n"+strings.TrimSpace(config.SystemPrompt))
 	}
 
-	// Add conversation history if enabled
-	if config.IncludeHistory && len(ctx.PreviousHistory) > 0 {
+	// Always add conversation history for multi-agent awareness
+	// This ensures all agents see the full cross-agent conversation
+	if len(ctx.PreviousHistory) > 0 {
 		sections = append(sections, a.formatHistory(ctx.PreviousHistory))
 	}
 
@@ -138,21 +137,10 @@ func (a *VibeAgent) buildPrompt(ctx types.ExecutionContext, config types.VibeCon
 	return strings.Join(sections, "\n\n")
 }
 
-// formatHistory formats conversation history for the prompt
+// formatHistory formats conversation history for the prompt with agent attribution
 func (a *VibeAgent) formatHistory(history []types.Message) string {
-	lines := []string{"Conversation history:"}
-	for _, msg := range history {
-		text := strings.TrimSpace(extractPrompt(msg))
-		if text == "" {
-			continue
-		}
-		role := strings.TrimSpace(msg.Role)
-		if role == "" {
-			role = "user"
-		}
-		lines = append(lines, fmt.Sprintf("%s: %s", strings.ToUpper(role), text))
-	}
-	return strings.Join(lines, "\n")
+	// Use the cross-agent history format for consistency
+	return formatCrossAgentHistory(history)
 }
 
 // buildArgs constructs CLI arguments from VibeConfig
@@ -160,6 +148,7 @@ func (a *VibeAgent) formatHistory(history []types.Message) string {
 //   - vibe "prompt" : Interactive mode with initial prompt
 //   - vibe --prompt "text" : Non-interactive mode with auto-approve
 //   - vibe --agent name : Use custom agent configuration
+//   - vibe --output text : Force text output (no TUI)
 func (a *VibeAgent) buildArgs(config types.VibeConfig) []string {
 	args := []string{}
 
@@ -171,7 +160,8 @@ func (a *VibeAgent) buildArgs(config types.VibeConfig) []string {
 	// Use --prompt for non-interactive mode (auto-approves tools)
 	// Otherwise use positional argument for interactive mode
 	if config.NonInteractive {
-		args = append(args, "--prompt", "{prompt}")
+		// Force text output to prevent vibe's TUI from rendering
+		args = append(args, "--prompt", "{prompt}", "--output", "text")
 	} else {
 		args = append(args, "{prompt}")
 	}

@@ -17,32 +17,38 @@ import (
 )
 
 type Server struct {
-	cfg       Config
-	logger    *utils.Logger
-	registry  *AgentRegistry
-	tasks     *TaskManager
-	contexts  *ContextManager
-	handler   *jsonrpc.Handler
-	startTime time.Time
-	settings  Settings
+	cfg            Config
+	logger         *utils.Logger
+	registry       *AgentRegistry
+	remoteRegistry *RemoteAgentRegistry
+	tasks          *TaskManager
+	contexts       *ContextManager
+	sessions       *SessionManager
+	handler        *jsonrpc.Handler
+	startTime      time.Time
+	settings       Settings
 }
 
 func NewServer(cfg Config, logger *utils.Logger) *Server {
 	if cfg.DataDir == "" {
 		cfg.DataDir = filepath.Join(os.Getenv("HOME"), ".a2a-hub")
 	}
+	registry := NewAgentRegistry(logger)
 	server := &Server{
-		cfg:       cfg,
-		logger:    logger,
-		registry:  NewAgentRegistry(logger),
-		tasks:     NewTaskManager(),
-		contexts:  NewContextManager(),
-		handler:   jsonrpc.NewHandler(),
-		startTime: time.Now().UTC(),
-		settings:  Settings{OrchestratorAgents: append([]string{}, cfg.Orchestrator.Agents...)},
+		cfg:            cfg,
+		logger:         logger,
+		registry:       registry,
+		remoteRegistry: NewRemoteAgentRegistry(registry),
+		tasks:          NewTaskManager(),
+		contexts:       NewContextManager(),
+		sessions:       NewSessionManager(),
+		handler:        jsonrpc.NewHandler(),
+		startTime:      time.Now().UTC(),
+		settings:       Settings{OrchestratorAgents: append([]string{}, cfg.Orchestrator.Agents...)},
 	}
 	server.tasks.SetPersistence(filepath.Join(cfg.DataDir, "tasks.json"))
 	server.contexts.SetPersistence(filepath.Join(cfg.DataDir, "contexts.json"))
+	server.sessions.SetDataDir(cfg.DataDir)
 	return server
 }
 
@@ -75,6 +81,9 @@ func (s *Server) RegisterHandlers() {
 	s.handler.Register("hub/agents/list", s.handleAgentsList)
 	s.handler.Register("hub/agents/get", s.handleAgentsGet)
 	s.handler.Register("hub/agents/health", s.handleAgentsHealth)
+	s.handler.Register("hub/agents/discover", s.handleAgentsDiscover)
+	s.handler.Register("hub/agents/remove-remote", s.handleAgentsRemoveRemote)
+	s.handler.Register("hub/agents/list-remote", s.handleAgentsListRemote)
 	s.handler.Register("hub/tasks/list", s.handleTasksList)
 	s.handler.Register("hub/contexts/list", s.handleContextsList)
 	s.handler.Register("message/send", s.handleMessageSend)
@@ -98,6 +107,22 @@ func (s *Server) Registry() *AgentRegistry {
 	return s.registry
 }
 
+func (s *Server) Sessions() *SessionManager {
+	return s.sessions
+}
+
+func (s *Server) Tasks() *TaskManager {
+	return s.tasks
+}
+
+func (s *Server) Contexts() *ContextManager {
+	return s.contexts
+}
+
+func (s *Server) RemoteRegistry() *RemoteAgentRegistry {
+	return s.remoteRegistry
+}
+
 func (s *Server) LoadState() error {
 	if err := s.EnsureDataDir(); err != nil {
 		return err
@@ -110,6 +135,9 @@ func (s *Server) LoadState() error {
 		return err
 	}
 	if err := s.tasks.Load(); err != nil {
+		return err
+	}
+	if err := s.sessions.Load(); err != nil {
 		return err
 	}
 	return nil
@@ -280,6 +308,89 @@ func (s *Server) handleAgentsHealth(ctx context.Context, params json.RawMessage)
 	return info.Health, nil
 }
 
+func (s *Server) handleAgentsDiscover(ctx context.Context, params json.RawMessage) (any, *jsonrpc.RPCError) {
+	var req struct {
+		CardURL string `json:"cardUrl"`
+		Alias   string `json:"alias"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil || req.CardURL == "" {
+		return nil, &jsonrpc.RPCError{Code: jsonrpc.ErrInvalidParams, Message: "cardUrl required"}
+	}
+
+	// Discover and register the remote agent
+	discoverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := s.remoteRegistry.DiscoverAndRegister(discoverCtx, req.CardURL, req.Alias); err != nil {
+		return nil, &jsonrpc.RPCError{Code: jsonrpc.ErrInternalError, Message: fmt.Sprintf("failed to discover agent: %v", err)}
+	}
+
+	// Persist the configuration
+	if err := s.AddRemoteAgent(req.CardURL, req.Alias); err != nil {
+		s.logger.Warnf("failed to persist remote agent config: %v", err)
+	}
+
+	// Return info about the registered agent
+	agents := s.remoteRegistry.ListInfo()
+	for _, agent := range agents {
+		if agent.CardURL == req.CardURL {
+			return map[string]any{
+				"registered": true,
+				"agent":      agent,
+			}, nil
+		}
+	}
+
+	return map[string]any{"registered": true}, nil
+}
+
+func (s *Server) handleAgentsRemoveRemote(ctx context.Context, params json.RawMessage) (any, *jsonrpc.RPCError) {
+	var req struct {
+		AgentID string `json:"agentId"`
+		CardURL string `json:"cardUrl"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &jsonrpc.RPCError{Code: jsonrpc.ErrInvalidParams, Message: "invalid params"}
+	}
+
+	// Find the agent by ID or CardURL
+	if req.AgentID == "" && req.CardURL == "" {
+		return nil, &jsonrpc.RPCError{Code: jsonrpc.ErrInvalidParams, Message: "agentId or cardUrl required"}
+	}
+
+	// Find the card URL if only agent ID was provided
+	cardURL := req.CardURL
+	if cardURL == "" {
+		agents := s.remoteRegistry.ListInfo()
+		for _, agent := range agents {
+			if agent.ID == req.AgentID {
+				cardURL = agent.CardURL
+				break
+			}
+		}
+	}
+
+	// Remove from runtime registry
+	if req.AgentID != "" {
+		if err := s.remoteRegistry.RemoveRemoteAgent(req.AgentID); err != nil {
+			s.logger.Warnf("failed to remove remote agent from registry: %v", err)
+		}
+	}
+
+	// Remove from persistent config
+	if cardURL != "" {
+		if err := s.RemoveRemoteAgent(cardURL); err != nil {
+			s.logger.Warnf("failed to remove remote agent config: %v", err)
+		}
+	}
+
+	return map[string]any{"removed": true}, nil
+}
+
+func (s *Server) handleAgentsListRemote(ctx context.Context, params json.RawMessage) (any, *jsonrpc.RPCError) {
+	return s.remoteRegistry.ListInfo(), nil
+}
+
 func (s *Server) handleTasksList(ctx context.Context, params json.RawMessage) (any, *jsonrpc.RPCError) {
 	var req struct {
 		ContextID string          `json:"contextId"`
@@ -346,6 +457,12 @@ func (s *Server) handleMessageSend(ctx context.Context, params json.RawMessage) 
 	taskID := utils.NewID("task")
 	req.Message.TaskID = taskID
 	req.Message.ContextID = contextID
+
+	// Add agent ID to user message metadata for history attribution
+	if req.Message.Metadata == nil {
+		req.Message.Metadata = make(map[string]any)
+	}
+
 	status := types.TaskStatus{State: types.TaskStateSubmitted, Timestamp: time.Now().UTC().Format(time.RFC3339Nano)}
 	task := &types.Task{Kind: "task", ID: taskID, ContextID: contextID, Status: status}
 	s.tasks.Create(task)
@@ -356,12 +473,25 @@ func (s *Server) handleMessageSend(ctx context.Context, params json.RawMessage) 
 		workingDir = extractWorkingDir(req.Message.Metadata)
 	}
 
+	// Get full conversation history from context for multi-agent awareness
+	historyLimit := req.Configuration.HistoryLength
+	var previousHistory []types.Message
+	if historyLimit > 0 {
+		previousHistory = s.contexts.GetHistoryWithLimit(contextID, historyLimit)
+	} else {
+		previousHistory = s.contexts.GetHistory(contextID)
+	}
+
+	// Store the user message in context history before execution
+	_ = s.contexts.AddMessage(contextID, req.Message)
+
 	result, err := info.Agent.Execute(types.ExecutionContext{
-		TaskID:      taskID,
-		ContextID:   contextID,
-		UserMessage: req.Message,
-		Timeout:     time.Duration(req.Configuration.TimeoutMs) * time.Millisecond,
-		WorkingDir:  workingDir,
+		TaskID:          taskID,
+		ContextID:       contextID,
+		UserMessage:     req.Message,
+		PreviousHistory: previousHistory,
+		Timeout:         time.Duration(req.Configuration.TimeoutMs) * time.Millisecond,
+		WorkingDir:      workingDir,
 	})
 	if err != nil {
 		_ = s.tasks.UpdateStatus(taskID, types.TaskStateFailed, &types.Message{Kind: "message", MessageID: "error-" + taskID, Role: "agent", Parts: []types.Part{{Kind: "text", Text: err.Error()}}, TaskID: taskID, ContextID: contextID})
@@ -370,6 +500,15 @@ func (s *Server) handleMessageSend(ctx context.Context, params json.RawMessage) 
 	if result.Task.Status.Message != nil {
 		result.Task.Status.Message.ContextID = contextID
 		result.Task.Status.Message.TaskID = taskID
+
+		// Add agent ID to response message metadata for history attribution
+		if result.Task.Status.Message.Metadata == nil {
+			result.Task.Status.Message.Metadata = make(map[string]any)
+		}
+		result.Task.Status.Message.Metadata["agentId"] = agentID
+
+		// Store the agent response in context history
+		_ = s.contexts.AddMessage(contextID, *result.Task.Status.Message)
 	}
 	task.Status = result.Task.Status
 	task.History = append([]types.Message{req.Message}, result.Task.History...)

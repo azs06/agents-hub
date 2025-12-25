@@ -6,12 +6,14 @@ import (
 	"sync"
 	"time"
 
+	"a2a-go/internal/types"
 	"a2a-go/internal/utils"
 )
 
 type Context struct {
-	ID        string
-	CreatedAt time.Time
+	ID        string           `json:"id"`
+	CreatedAt time.Time        `json:"createdAt"`
+	History   []types.Message  `json:"history,omitempty"`
 }
 
 type ContextManager struct {
@@ -56,6 +58,57 @@ func (cm *ContextManager) List(limit int) []Context {
 		return result[:limit]
 	}
 	return result
+}
+
+// AddMessage appends a message to the context history
+func (cm *ContextManager) AddMessage(contextID string, msg types.Message) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	ctx, ok := cm.contexts[contextID]
+	if !ok {
+		// Create context if it doesn't exist
+		ctx = Context{
+			ID:        contextID,
+			CreatedAt: time.Now().UTC(),
+			History:   []types.Message{},
+		}
+	}
+
+	ctx.History = append(ctx.History, msg)
+	cm.contexts[contextID] = ctx
+	cm.persistLocked()
+	return nil
+}
+
+// GetHistory returns the full history for a context
+func (cm *ContextManager) GetHistory(contextID string) []types.Message {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	ctx, ok := cm.contexts[contextID]
+	if !ok {
+		return nil
+	}
+	return ctx.History
+}
+
+// GetHistoryWithLimit returns history with a maximum number of messages
+func (cm *ContextManager) GetHistoryWithLimit(contextID string, limit int) []types.Message {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	ctx, ok := cm.contexts[contextID]
+	if !ok {
+		return nil
+	}
+
+	if limit <= 0 || limit >= len(ctx.History) {
+		return ctx.History
+	}
+
+	// Return the most recent messages
+	return ctx.History[len(ctx.History)-limit:]
 }
 
 func (cm *ContextManager) Load() error {
