@@ -26,12 +26,13 @@ func NewGeminiAgent(baseURL string) *GeminiAgent {
 	}
 
 	cliAgent := NewCLIAgent(CLIConfig{
-		AgentID:    "gemini",
-		Name:       "Gemini CLI",
-		Exec:       resolveExec("gemini", "GEMINI_CMD", "GEMINI_EXEC"),
-		HealthArgs: []string{"--version"},
-		Args:       []string{"{prompt}", "-o", "text"},
-		Card:       card,
+		AgentID:        "gemini",
+		Name:           "Gemini CLI",
+		Exec:           resolveExec("gemini", "GEMINI_CMD", "GEMINI_EXEC"),
+		HealthArgs:     []string{"--version"},
+		Args:           []string{"{prompt}", "-o", "text"},
+		Card:           card,
+		PromptPatterns: codexPromptPatterns(),
 	})
 
 	return &GeminiAgent{

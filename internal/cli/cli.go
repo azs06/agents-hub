@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,11 +17,15 @@ import (
 	"syscall"
 	"time"
 
+	internala2a "a2a-go/internal/a2a"
 	"a2a-go/internal/hub"
 	"a2a-go/internal/jsonrpc"
 	"a2a-go/internal/transport"
 	"a2a-go/internal/types"
 	"a2a-go/internal/utils"
+
+	sdka2a "github.com/a2aproject/a2a-go/a2a"
+	"github.com/a2aproject/a2a-go/a2aclient"
 )
 
 func Run() int {
@@ -195,6 +201,18 @@ func runSend(args []string) int {
 	agentID := fs.Arg(0)
 	messageText := fs.Arg(1)
 
+	if baseURL := resolveA2ABaseURL(); baseURL != "" {
+		resp, err := sendA2A(context.Background(), baseURL, agentID, messageText, *contextID, *timeoutMs)
+		if err == nil {
+			printResponse(resp, *format)
+			return 0
+		}
+		if !isA2ATransportError(err) {
+			fmt.Println(err.Error())
+			return 1
+		}
+	}
+
 	msg := types.Message{
 		Kind:      "message",
 		MessageID: "msg-" + fmt.Sprint(time.Now().UnixNano()),
@@ -281,6 +299,81 @@ func printResponse(resp jsonrpc.Response, format string) {
 	}
 	data, _ := json.MarshalIndent(resp, "", "  ")
 	fmt.Println(string(data))
+}
+
+func resolveA2ABaseURL() string {
+	if val := strings.TrimSpace(os.Getenv("A2A_HUB_URL")); val != "" {
+		return val
+	}
+	return "http://127.0.0.1:8080"
+}
+
+func isA2ATransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "failed to send HTTP request") ||
+		strings.Contains(msg, "unexpected HTTP status") ||
+		strings.Contains(msg, "failed to decode response")
+}
+
+func sendA2A(ctx context.Context, baseURL, agentID, messageText, contextID string, timeoutMs int) (jsonrpc.Response, error) {
+	if strings.TrimSpace(baseURL) == "" {
+		return jsonrpc.Response{}, errors.New("missing A2A base URL")
+	}
+	a2aURL := strings.TrimRight(baseURL, "/") + "/a2a"
+	client, err := a2aclient.NewFromEndpoints(ctx, []sdka2a.AgentInterface{
+		{URL: a2aURL, Transport: sdka2a.TransportProtocolJSONRPC},
+	})
+	if err != nil {
+		return jsonrpc.Response{}, err
+	}
+
+	message := sdka2a.NewMessage(sdka2a.MessageRoleUser, &sdka2a.TextPart{Text: messageText})
+	if strings.TrimSpace(contextID) != "" {
+		message.ContextID = contextID
+	}
+	message.Metadata = map[string]any{"targetAgent": agentID}
+	if cwd, err := os.Getwd(); err == nil {
+		message.Metadata["workingDirectory"] = cwd
+	}
+
+	history := 10
+	cfg := &sdka2a.MessageSendConfig{HistoryLength: &history}
+	params := &sdka2a.MessageSendParams{Message: message, Config: cfg}
+
+	sendCtx := ctx
+	if timeoutMs > 0 {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(sendCtx, time.Duration(timeoutMs)*time.Millisecond)
+		defer cancel()
+	}
+
+	result, err := client.SendMessage(sendCtx, params)
+	if err != nil {
+		return jsonrpc.Response{}, err
+	}
+
+	var payload any
+	switch resp := result.(type) {
+	case *sdka2a.Task:
+		payload = internala2a.FromSDKTask(resp)
+	case *sdka2a.Message:
+		payload = internala2a.FromSDKMessage(resp)
+	default:
+		payload = result
+	}
+
+	return jsonrpc.Response{JSONRPC: "2.0", Result: payload, ID: "1"}, nil
 }
 
 func parsePID(val string) int {

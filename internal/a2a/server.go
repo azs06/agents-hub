@@ -3,6 +3,7 @@ package a2a
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"a2a-go/internal/hub"
 	"a2a-go/internal/types"
@@ -95,6 +96,7 @@ func (s *A2AServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 
 // buildHubAgentCard creates the hub's agent card
 func (s *A2AServer) buildHubAgentCard() *sdka2a.AgentCard {
+	a2aURL := strings.TrimRight(s.baseURL, "/") + "/a2a"
 	// Get all registered agents as skills
 	agents := s.server.Registry().List()
 	skills := make([]sdka2a.AgentSkill, 0, len(agents))
@@ -116,12 +118,16 @@ func (s *A2AServer) buildHubAgentCard() *sdka2a.AgentCard {
 	return &sdka2a.AgentCard{
 		Name:            "Agents Hub",
 		Description:     "Multi-agent orchestration hub supporting A2A protocol",
-		URL:             s.baseURL,
+		URL:             a2aURL,
 		Version:         "1.0.0",
 		ProtocolVersion: "1.0",
 		Provider: &sdka2a.AgentProvider{
 			Org: "Local",
 			URL: s.baseURL,
+		},
+		PreferredTransport: sdka2a.TransportProtocolJSONRPC,
+		AdditionalInterfaces: []sdka2a.AgentInterface{
+			{URL: a2aURL, Transport: sdka2a.TransportProtocolJSONRPC},
 		},
 		Capabilities: sdka2a.AgentCapabilities{
 			Streaming:              true,

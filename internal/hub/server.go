@@ -54,6 +54,7 @@ func NewServer(cfg Config, logger *utils.Logger) *Server {
 
 func (s *Server) InitAgents(baseURL string) error {
 	caller := NewLocalCaller(s.handler)
+	a2aCaller := NewA2ARoutingCaller(caller, baseURL, s.cfg.HTTP.Enabled)
 	agentsList := []agents.Agent{
 		agents.NewClaudeAgent(baseURL),
 		agents.NewGeminiAgent(baseURL),
@@ -61,9 +62,9 @@ func (s *Server) InitAgents(baseURL string) error {
 		agents.NewVibeAgent(baseURL),
 	}
 	if len(s.cfg.Orchestrator.Agents) > 0 {
-		orchestratorAgent := agents.Agent(agents.NewOrchestrator(caller, baseURL, s.cfg.Orchestrator.Agents))
+		orchestratorAgent := agents.Agent(agents.NewOrchestrator(a2aCaller, baseURL, s.cfg.Orchestrator.Agents))
 		if strings.TrimSpace(s.cfg.Orchestrator.RouterAgent) != "" {
-			orchestratorAgent = agents.NewLLMOrchestrator(caller, baseURL, s.cfg.Orchestrator.Agents, s.cfg.Orchestrator.RouterAgent)
+			orchestratorAgent = agents.NewLLMOrchestrator(a2aCaller, baseURL, s.cfg.Orchestrator.Agents, s.cfg.Orchestrator.RouterAgent)
 		}
 		agentsList = append([]agents.Agent{orchestratorAgent}, agentsList...)
 	}
@@ -553,11 +554,12 @@ func (s *Server) handleTaskCancel(ctx context.Context, params json.RawMessage) (
 }
 
 func (s *Server) HubCard(baseURL string) types.AgentCard {
+	a2aURL := strings.TrimRight(baseURL, "/") + "/a2a"
 	return types.AgentCard{
 		ProtocolVersion: "1.0",
 		Name:            "A2A Local Hub",
 		Description:     "Local multi-agent hub",
-		URL:             baseURL,
+		URL:             a2aURL,
 		Version:         "1.0.0",
 		Provider:        types.Provider{Name: "Local"},
 		Skills:          []types.Skill{},

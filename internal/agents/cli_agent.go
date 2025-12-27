@@ -12,6 +12,7 @@ import (
 
 	"a2a-go/internal/types"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
 
@@ -178,6 +179,7 @@ func (a *CLIAgent) ExecuteStreaming(ctx types.ExecutionContext, output chan<- ty
 	go func() {
 		defer close(done)
 		scanner := bufio.NewScanner(ptmx)
+		scanner.Split(scanLinesAnyCRLF)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -333,6 +335,7 @@ func (a *CLIAgent) ExecuteStreamingWithArgs(ctx types.ExecutionContext, customAr
 	go func() {
 		defer close(done)
 		scanner := bufio.NewScanner(ptmx)
+		scanner.Split(scanLinesAnyCRLF)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -454,10 +457,42 @@ func (a *CLIAgent) isPrompt(line string) bool {
 	if len(a.promptPatterns) == 0 {
 		return false
 	}
+	cleaned := strings.TrimSpace(ansi.Strip(line))
+	if cleaned == "" {
+		return false
+	}
 	for _, pattern := range a.promptPatterns {
-		if pattern.MatchString(line) {
+		if pattern.MatchString(cleaned) {
 			return true
 		}
 	}
 	return false
+}
+
+func scanLinesAnyCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '\n':
+			return i + 1, dropTrailingCR(data[:i]), nil
+		case '\r':
+			if i+1 < len(data) && data[i+1] == '\n' {
+				return i + 2, data[:i], nil
+			}
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), dropTrailingCR(data), nil
+	}
+	return 0, nil, nil
+}
+
+func dropTrailingCR(data []byte) []byte {
+	if len(data) > 0 && data[len(data)-1] == '\r' {
+		return data[:len(data)-1]
+	}
+	return data
 }

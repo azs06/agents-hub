@@ -99,6 +99,11 @@ func FromSDKParts(parts sdka2a.ContentParts) []types.Part {
 				Kind: "text",
 				Text: pt.Text,
 			})
+		case sdka2a.TextPart:
+			result = append(result, types.Part{
+				Kind: "text",
+				Text: pt.Text,
+			})
 		case *sdka2a.FilePart:
 			file := &types.File{}
 			if pt.File != nil {
@@ -107,7 +112,41 @@ func FromSDKParts(parts sdka2a.ContentParts) []types.Part {
 					file.Name = fc.Name
 					file.MimeType = fc.MimeType
 					file.Bytes = fc.Bytes
+				case sdka2a.FileBytes:
+					file.Name = fc.Name
+					file.MimeType = fc.MimeType
+					file.Bytes = fc.Bytes
 				case *sdka2a.FileURI:
+					file.Name = fc.Name
+					file.MimeType = fc.MimeType
+					file.URI = fc.URI
+				case sdka2a.FileURI:
+					file.Name = fc.Name
+					file.MimeType = fc.MimeType
+					file.URI = fc.URI
+				}
+			}
+			result = append(result, types.Part{
+				Kind: "file",
+				File: file,
+			})
+		case sdka2a.FilePart:
+			file := &types.File{}
+			if pt.File != nil {
+				switch fc := pt.File.(type) {
+				case *sdka2a.FileBytes:
+					file.Name = fc.Name
+					file.MimeType = fc.MimeType
+					file.Bytes = fc.Bytes
+				case sdka2a.FileBytes:
+					file.Name = fc.Name
+					file.MimeType = fc.MimeType
+					file.Bytes = fc.Bytes
+				case *sdka2a.FileURI:
+					file.Name = fc.Name
+					file.MimeType = fc.MimeType
+					file.URI = fc.URI
+				case sdka2a.FileURI:
 					file.Name = fc.Name
 					file.MimeType = fc.MimeType
 					file.URI = fc.URI
@@ -118,6 +157,11 @@ func FromSDKParts(parts sdka2a.ContentParts) []types.Part {
 				File: file,
 			})
 		case *sdka2a.DataPart:
+			result = append(result, types.Part{
+				Kind: "data",
+				Data: pt.Data,
+			})
+		case sdka2a.DataPart:
 			result = append(result, types.Part{
 				Kind: "data",
 				Data: pt.Data,

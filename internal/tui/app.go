@@ -121,38 +121,38 @@ type model struct {
 	sendViewport  viewport.Model
 	sendLogSeeded bool
 
-	agentInput      textinput.Model
-	msgInput        textarea.Model
-	focusIndex      int
-	agentsList      list.Model
-	tasksList       list.Model
-	responsesList   list.Model
-	detailViewport  viewport.Model
-	keys            keyMap
-	help            help.Model
+	agentInput             textinput.Model
+	msgInput               textarea.Model
+	focusIndex             int
+	agentsList             list.Model
+	tasksList              list.Model
+	responsesList          list.Model
+	detailViewport         viewport.Model
+	keys                   keyMap
+	help                   help.Model
 	showHelp               bool
 	commandMode            bool
 	commandModeFromWelcome bool // track if command mode was entered from welcome screen
 	commandInput           textinput.Model
-	commandHistory  []string
-	historyIndex    int
-	commandIndex    int
-	commandResults  []commandSpec
-	spinner         spinner.Model
-	refreshing      bool
-	pendingRefresh  int
-	showLogs        bool
-	altScreen       bool
-	logs            []logEntry
-	logViewport     viewport.Model
-	logLines        []string
-	showSendModal   bool
-	agentIndex      int
-	taskIndex       int
-	historySel      int
-	detailContent   string
-	settingsInput   textinput.Model
-	settingsMessage string
+	commandHistory         []string
+	historyIndex           int
+	commandIndex           int
+	commandResults         []commandSpec
+	spinner                spinner.Model
+	refreshing             bool
+	pendingRefresh         int
+	showLogs               bool
+	altScreen              bool
+	logs                   []logEntry
+	logViewport            viewport.Model
+	logLines               []string
+	showSendModal          bool
+	agentIndex             int
+	taskIndex              int
+	historySel             int
+	detailContent          string
+	settingsInput          textinput.Model
+	settingsMessage        string
 
 	// Claude settings
 	claudeModelInput   textinput.Model
@@ -381,63 +381,63 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 	}
 
 	m := model{
-		cfg:                cfg,
-		logger:             logger,
-		caller:             caller,
-		server:             server,
-		ctx:                ctx,
-		cancel:             cancel,
-		sessionStart:       time.Now().UTC(),
-		activeTab:          tabSend,
-		agentInput:         agentInput,
-		msgInput:           msgInput,
-		commandInput:       commandInput,
-		focusIndex:         1,
-		agentsList:         agentsList,
-		tasksList:          tasksList,
-		responsesList:      responsesList,
-		detailViewport:     detailViewport,
-		keys:               defaultKeyMap,
-		help:               help.New(),
-		commandHistory:     []string{},
-		historyIndex:       0,
-		commandIndex:       0,
-		spinner:            spin,
-		showLogs:           false,
-		altScreen:          true,
-		logs:               []logEntry{},
-		logViewport:        logViewport,
-		logLines:           []string{},
-		sendLog:            []sendEntry{},
-		sendViewport:       sendViewport,
-		settingsInput:      settingsInput,
-		settingsMessage:    "",
-		claudeModelInput:   claudeModelInput,
-		claudeToolsInput:   claudeToolsInput,
-		claudeContinue:     claudeSettings.EnableContinue,
-		codexModelInput:    codexModelInput,
-		codexProfileInput:  codexProfileInput,
-		codexSandboxInput:  codexSandboxInput,
-		codexApprovalInput: codexApprovalInput,
-		codexSearch:        codexSettings.EnableSearch,
-		geminiModelInput:   geminiModelInput,
+		cfg:                 cfg,
+		logger:              logger,
+		caller:              caller,
+		server:              server,
+		ctx:                 ctx,
+		cancel:              cancel,
+		sessionStart:        time.Now().UTC(),
+		activeTab:           tabSend,
+		agentInput:          agentInput,
+		msgInput:            msgInput,
+		commandInput:        commandInput,
+		focusIndex:          1,
+		agentsList:          agentsList,
+		tasksList:           tasksList,
+		responsesList:       responsesList,
+		detailViewport:      detailViewport,
+		keys:                defaultKeyMap,
+		help:                help.New(),
+		commandHistory:      []string{},
+		historyIndex:        0,
+		commandIndex:        0,
+		spinner:             spin,
+		showLogs:            false,
+		altScreen:           true,
+		logs:                []logEntry{},
+		logViewport:         logViewport,
+		logLines:            []string{},
+		sendLog:             []sendEntry{},
+		sendViewport:        sendViewport,
+		settingsInput:       settingsInput,
+		settingsMessage:     "",
+		claudeModelInput:    claudeModelInput,
+		claudeToolsInput:    claudeToolsInput,
+		claudeContinue:      claudeSettings.EnableContinue,
+		codexModelInput:     codexModelInput,
+		codexProfileInput:   codexProfileInput,
+		codexSandboxInput:   codexSandboxInput,
+		codexApprovalInput:  codexApprovalInput,
+		codexSearch:         codexSettings.EnableSearch,
+		geminiModelInput:    geminiModelInput,
 		geminiApprovalInput: geminiApprovalInput,
-		geminiSandbox:      geminiSettings.DefaultSandbox,
-		vibeAgentInput:     vibeAgentInput,
-		vibeNonInteractive: vibeSettings.NonInteractive,
-		vibeAutoApprove:    vibeSettings.AutoApprove,
-		vibeIncludeHistory: vibeSettings.IncludeHistory,
-		settingsFocusIndex: 0,
-		showSendModal:      false,
-		showWelcome:        true,
-		activeAgents:       make(map[string]string),
-		agentProgress:      make(map[string]string),
-		streamChannels:     make(map[string]*AgentStream),
-		streamBuffer:       make(map[string][]string),
-		pendingPrompts:     []string{},
-		currentSessionID:   currentSessionID,
-		sessions:           server.Sessions().List(),
-		sessionsList:       sessionsList,
+		geminiSandbox:       geminiSettings.DefaultSandbox,
+		vibeAgentInput:      vibeAgentInput,
+		vibeNonInteractive:  vibeSettings.NonInteractive,
+		vibeAutoApprove:     vibeSettings.AutoApprove,
+		vibeIncludeHistory:  vibeSettings.IncludeHistory,
+		settingsFocusIndex:  0,
+		showSendModal:       false,
+		showWelcome:         true,
+		activeAgents:        make(map[string]string),
+		agentProgress:       make(map[string]string),
+		streamChannels:      make(map[string]*AgentStream),
+		streamBuffer:        make(map[string][]string),
+		pendingPrompts:      []string{},
+		currentSessionID:    currentSessionID,
+		sessions:            server.Sessions().List(),
+		sessionsList:        sessionsList,
 	}
 	m.updateMessagePrompt()
 
@@ -595,12 +595,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.KeyMsg:
+		escPressed := isEscapeKey(msg)
 		// Debug: log all key presses
-		if msg.String() == "esc" {
+		if escPressed {
 			m.addLog("debug", fmt.Sprintf("KEY: esc, showWelcome=%v, commandMode=%v, commandModeFromWelcome=%v", m.showWelcome, m.commandMode, m.commandModeFromWelcome))
 		}
 		// Global agent picker handler - works in all views
 		if m.showAgentPicker {
+			if escPressed {
+				m.showAgentPicker = false
+				return m, nil
+			}
 			switch msg.String() {
 			case "up", "k":
 				if m.agentPickerIndex > 0 {
@@ -619,26 +624,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.showAgentPicker = false
 				return m, nil
-			case "esc":
-				m.showAgentPicker = false
-				return m, nil
 			}
 			return m, nil
 		}
 
 		// Handle welcome screen interactions
 		if m.showWelcome && !m.commandMode {
-			switch msg.String() {
-				case "esc":
+			if escPressed {
 				// Exit welcome, enter command mode
 				m.showWelcome = false
 				m.showSendModal = true
 				m.commandMode = true
+				m.commandModeFromWelcome = true
 				m.commandInput.Focus()
 				m.historyIndex = len(m.commandHistory)
 				m.commandIndex = 0
 				m.updateCommandResults()
 				return m, nil
+			}
+			switch msg.String() {
 			case "/":
 				if strings.TrimSpace(m.msgInput.Value()) == "" {
 					// Exit welcome, enter command mode
@@ -675,7 +679,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if msg.String() == "esc" && !m.commandMode {
+		if escPressed && !m.commandMode {
 			if m.confirmQuit {
 				m.confirmQuit = false
 				m.confirmMessage = ""
@@ -706,10 +710,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.confirmQuit {
+			if escPressed {
+				m.confirmQuit = false
+				m.confirmMessage = ""
+				return m, nil
+			}
 			switch msg.String() {
 			case "y", "enter":
 				return m, tea.Quit
-			case "n", "esc":
+			case "n":
 				m.confirmQuit = false
 				m.confirmMessage = ""
 				return m, nil
@@ -723,6 +732,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.ExitAltScreen
 		}
 		if m.showSendModal && !m.commandMode {
+			if escPressed {
+				m.showSendModal = false
+				m.msgInput.Blur()
+				m.agentInput.Blur()
+				m.syncSendViewport()
+				return m, nil
+			}
 			switch msg.String() {
 			case "ctrl+p":
 				m.commandMode = true
@@ -730,12 +746,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.historyIndex = len(m.commandHistory)
 				m.commandIndex = 0
 				m.updateCommandResults()
-				return m, nil
-			case "esc":
-				m.showSendModal = false
-				m.msgInput.Blur()
-				m.agentInput.Blur()
-				m.syncSendViewport()
 				return m, nil
 			case "tab", "shift+tab":
 				// Focus mode: switch between agents waiting for input
@@ -800,8 +810,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.commandMode {
-			switch msg.String() {
-				case "esc":
+			if escPressed {
 				m.addLog("debug", fmt.Sprintf("ESC in command mode: commandModeFromWelcome=%v", m.commandModeFromWelcome))
 				m.commandMode = false
 				m.commandInput.Blur()
@@ -810,24 +819,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandIndex = 0
 
 				if m.commandModeFromWelcome {
-					// Came from "/" on welcome - go back to welcome
+					// Return to welcome screen if command palette opened from there.
 					m.showWelcome = true
 					m.showSendModal = false
 					m.commandModeFromWelcome = false
 					m.msgInput.Focus()
 					m.addLog("debug", "Returning to welcome screen")
-				} else {
-					// Came from ESC on welcome or other - go to send view
-					m.activeTab = tabSend
-					m.showSendModal = true
-					m.showWelcome = false
-					m.focusIndex = 1
-					m.agentInput.Blur()
+					return m, nil
+				}
+				m.commandModeFromWelcome = false
+
+				if m.showWelcome {
 					m.msgInput.Focus()
+					return m, nil
+				}
+				if m.showSendModal || m.activeTab == tabSend {
+					if m.focusIndex == 0 {
+						m.msgInput.Blur()
+						m.agentInput.Focus()
+					} else {
+						m.agentInput.Blur()
+						m.msgInput.Focus()
+					}
 					m.syncSendViewport()
-					m.addLog("debug", "Going to Send tab")
+					return m, nil
+				}
+				if m.activeTab == tabSettings {
+					m.setSettingsFocus(true)
+					return m, nil
 				}
 				return m, nil
+			}
+			switch msg.String() {
 			case "enter":
 				cmdText := strings.TrimSpace(m.commandInput.Value())
 				if len(m.commandResults) > 0 && !strings.Contains(cmdText, " ") {
@@ -836,6 +859,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandInput.SetValue("")
 				m.commandInput.Blur()
 				m.commandMode = false
+				m.commandModeFromWelcome = false
 				m.historyIndex = len(m.commandHistory)
 				m.commandIndex = 0
 				if cmdText == "" {
@@ -871,7 +895,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.updateActiveList(msg)
 			return m, cmd
 		}
-		if m.showHelp && (msg.String() == "?" || msg.String() == "esc") {
+		if m.showHelp && (msg.String() == "?" || escPressed) {
 			m.showHelp = false
 			return m, nil
 		}
@@ -964,164 +988,167 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				}
-				                if m.settingsFocusIndex == settingsFieldCodexSearch {
-									m.codexSearch = !m.codexSearch
-									if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
-									}
-									return m, nil
-								}
-								if m.settingsFocusIndex == settingsFieldGeminiSandbox {
-									m.geminiSandbox = !m.geminiSandbox
-									if err := m.server.UpdateGeminiSandbox(m.geminiSandbox); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Gemini sandbox: %t", m.geminiSandbox)
-									}
-									return m, nil
-								}
-								if m.settingsFocusIndex == settingsFieldVibeNonInteractive {
-									m.vibeNonInteractive = !m.vibeNonInteractive
-									if err := m.server.UpdateVibeNonInteractive(m.vibeNonInteractive); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Vibe non-interactive: %t", m.vibeNonInteractive)
-									}
-									return m, nil
-								}
-								if m.settingsFocusIndex == settingsFieldVibeAutoApprove {
-									m.vibeAutoApprove = !m.vibeAutoApprove
-									if err := m.server.UpdateVibeAutoApprove(m.vibeAutoApprove); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Vibe auto-approve: %t", m.vibeAutoApprove)
-									}
-									return m, nil
-								}
-								if m.settingsFocusIndex == settingsFieldVibeIncludeHistory {
-									m.vibeIncludeHistory = !m.vibeIncludeHistory
-									if err := m.server.UpdateVibeIncludeHistory(m.vibeIncludeHistory); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Vibe include history: %t", m.vibeIncludeHistory)
-									}
-									return m, nil
-								}
-							case "enter":
-								switch m.settingsFocusIndex {
-				                // ...
-								case settingsFieldGeminiModel:
-									model := strings.TrimSpace(m.geminiModelInput.Value())
-									if err := m.server.UpdateGeminiModel(model); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else if model == "" {
-										m.settingsMessage = "Gemini model: default"
-									} else {
-										m.settingsMessage = "Gemini model: " + model
-									}
-								case settingsFieldGeminiSandbox:
-									m.geminiSandbox = !m.geminiSandbox
-									if err := m.server.UpdateGeminiSandbox(m.geminiSandbox); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Gemini sandbox: %t", m.geminiSandbox)
-									}
-								case settingsFieldGeminiApproval:
-									mode := strings.TrimSpace(m.geminiApprovalInput.Value())
-									if mode != "" && mode != "default" && mode != "auto_edit" && mode != "yolo" {
-										m.settingsMessage = "Invalid mode: use default, auto_edit, yolo, or blank"
-										return m, nil
-									}
-									if err := m.server.UpdateGeminiApprovalMode(mode); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else if mode == "" {
-										m.settingsMessage = "Gemini approval: default"
-									} else {
-										m.settingsMessage = "Gemini approval: " + mode
-									}
-								case settingsFieldVibeAgent:
-									agent := strings.TrimSpace(m.vibeAgentInput.Value())
-									if err := m.server.UpdateVibeAgent(agent); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else if agent == "" {
-										m.settingsMessage = "Vibe agent: default"
-									} else {
-										m.settingsMessage = "Vibe agent: " + agent
-									}
-								case settingsFieldVibeNonInteractive:
-									m.vibeNonInteractive = !m.vibeNonInteractive
-									if err := m.server.UpdateVibeNonInteractive(m.vibeNonInteractive); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Vibe non-interactive: %t", m.vibeNonInteractive)
-									}
-								case settingsFieldVibeAutoApprove:
-									m.vibeAutoApprove = !m.vibeAutoApprove
-									if err := m.server.UpdateVibeAutoApprove(m.vibeAutoApprove); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Vibe auto-approve: %t", m.vibeAutoApprove)
-									}
-								case settingsFieldVibeIncludeHistory:
-									m.vibeIncludeHistory = !m.vibeIncludeHistory
-									if err := m.server.UpdateVibeIncludeHistory(m.vibeIncludeHistory); err != nil {
-										m.settingsMessage = "Failed to save: " + err.Error()
-									} else {
-										m.settingsMessage = fmt.Sprintf("Vibe include history: %t", m.vibeIncludeHistory)
-									}
-								}
-								return m, nil
-							}
-						}
-						// Update the focused input
-						var cmd tea.Cmd
-						switch m.settingsFocusIndex {
-						case settingsFieldOrchestrator:
-							m.settingsInput, cmd = m.settingsInput.Update(msg)
-						case settingsFieldClaudeModel:
-							m.claudeModelInput, cmd = m.claudeModelInput.Update(msg)
-						case settingsFieldClaudeTools:
-							m.claudeToolsInput, cmd = m.claudeToolsInput.Update(msg)
-						case settingsFieldCodexModel:
-							m.codexModelInput, cmd = m.codexModelInput.Update(msg)
-						case settingsFieldCodexProfile:
-							m.codexProfileInput, cmd = m.codexProfileInput.Update(msg)
-						case settingsFieldCodexSandbox:
-							m.codexSandboxInput, cmd = m.codexSandboxInput.Update(msg)
-						case settingsFieldCodexApproval:
-							m.codexApprovalInput, cmd = m.codexApprovalInput.Update(msg)
-						case settingsFieldGeminiModel:
-							m.geminiModelInput, cmd = m.geminiModelInput.Update(msg)
-						case settingsFieldGeminiApproval:
-							m.geminiApprovalInput, cmd = m.geminiApprovalInput.Update(msg)
-						case settingsFieldVibeAgent:
-							m.vibeAgentInput, cmd = m.vibeAgentInput.Update(msg)
-						}
-						return m, cmd
+				if m.settingsFocusIndex == settingsFieldCodexSearch {
+					m.codexSearch = !m.codexSearch
+					if err := m.server.UpdateCodexSearch(m.codexSearch); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Codex search: %t", m.codexSearch)
 					}
+					return m, nil
+				}
+				if m.settingsFocusIndex == settingsFieldGeminiSandbox {
+					m.geminiSandbox = !m.geminiSandbox
+					if err := m.server.UpdateGeminiSandbox(m.geminiSandbox); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Gemini sandbox: %t", m.geminiSandbox)
+					}
+					return m, nil
+				}
+				if m.settingsFocusIndex == settingsFieldVibeNonInteractive {
+					m.vibeNonInteractive = !m.vibeNonInteractive
+					if err := m.server.UpdateVibeNonInteractive(m.vibeNonInteractive); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Vibe non-interactive: %t", m.vibeNonInteractive)
+					}
+					return m, nil
+				}
+				if m.settingsFocusIndex == settingsFieldVibeAutoApprove {
+					m.vibeAutoApprove = !m.vibeAutoApprove
+					if err := m.server.UpdateVibeAutoApprove(m.vibeAutoApprove); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Vibe auto-approve: %t", m.vibeAutoApprove)
+					}
+					return m, nil
+				}
+				if m.settingsFocusIndex == settingsFieldVibeIncludeHistory {
+					m.vibeIncludeHistory = !m.vibeIncludeHistory
+					if err := m.server.UpdateVibeIncludeHistory(m.vibeIncludeHistory); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Vibe include history: %t", m.vibeIncludeHistory)
+					}
+					return m, nil
+				}
+			case "enter":
+				switch m.settingsFocusIndex {
+				// ...
+				case settingsFieldGeminiModel:
+					model := strings.TrimSpace(m.geminiModelInput.Value())
+					if err := m.server.UpdateGeminiModel(model); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if model == "" {
+						m.settingsMessage = "Gemini model: default"
+					} else {
+						m.settingsMessage = "Gemini model: " + model
+					}
+				case settingsFieldGeminiSandbox:
+					m.geminiSandbox = !m.geminiSandbox
+					if err := m.server.UpdateGeminiSandbox(m.geminiSandbox); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Gemini sandbox: %t", m.geminiSandbox)
+					}
+				case settingsFieldGeminiApproval:
+					mode := strings.TrimSpace(m.geminiApprovalInput.Value())
+					if mode != "" && mode != "default" && mode != "auto_edit" && mode != "yolo" {
+						m.settingsMessage = "Invalid mode: use default, auto_edit, yolo, or blank"
+						return m, nil
+					}
+					if err := m.server.UpdateGeminiApprovalMode(mode); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if mode == "" {
+						m.settingsMessage = "Gemini approval: default"
+					} else {
+						m.settingsMessage = "Gemini approval: " + mode
+					}
+				case settingsFieldVibeAgent:
+					agent := strings.TrimSpace(m.vibeAgentInput.Value())
+					if err := m.server.UpdateVibeAgent(agent); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else if agent == "" {
+						m.settingsMessage = "Vibe agent: default"
+					} else {
+						m.settingsMessage = "Vibe agent: " + agent
+					}
+				case settingsFieldVibeNonInteractive:
+					m.vibeNonInteractive = !m.vibeNonInteractive
+					if err := m.server.UpdateVibeNonInteractive(m.vibeNonInteractive); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Vibe non-interactive: %t", m.vibeNonInteractive)
+					}
+				case settingsFieldVibeAutoApprove:
+					m.vibeAutoApprove = !m.vibeAutoApprove
+					if err := m.server.UpdateVibeAutoApprove(m.vibeAutoApprove); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Vibe auto-approve: %t", m.vibeAutoApprove)
+					}
+				case settingsFieldVibeIncludeHistory:
+					m.vibeIncludeHistory = !m.vibeIncludeHistory
+					if err := m.server.UpdateVibeIncludeHistory(m.vibeIncludeHistory); err != nil {
+						m.settingsMessage = "Failed to save: " + err.Error()
+					} else {
+						m.settingsMessage = fmt.Sprintf("Vibe include history: %t", m.vibeIncludeHistory)
+					}
+				}
+				return m, nil
+			}
+		}
+		// Update the focused input
+		var cmd tea.Cmd
+		switch m.settingsFocusIndex {
+		case settingsFieldOrchestrator:
+			m.settingsInput, cmd = m.settingsInput.Update(msg)
+		case settingsFieldClaudeModel:
+			m.claudeModelInput, cmd = m.claudeModelInput.Update(msg)
+		case settingsFieldClaudeTools:
+			m.claudeToolsInput, cmd = m.claudeToolsInput.Update(msg)
+		case settingsFieldCodexModel:
+			m.codexModelInput, cmd = m.codexModelInput.Update(msg)
+		case settingsFieldCodexProfile:
+			m.codexProfileInput, cmd = m.codexProfileInput.Update(msg)
+		case settingsFieldCodexSandbox:
+			m.codexSandboxInput, cmd = m.codexSandboxInput.Update(msg)
+		case settingsFieldCodexApproval:
+			m.codexApprovalInput, cmd = m.codexApprovalInput.Update(msg)
+		case settingsFieldGeminiModel:
+			m.geminiModelInput, cmd = m.geminiModelInput.Update(msg)
+		case settingsFieldGeminiApproval:
+			m.geminiApprovalInput, cmd = m.geminiApprovalInput.Update(msg)
+		case settingsFieldVibeAgent:
+			m.vibeAgentInput, cmd = m.vibeAgentInput.Update(msg)
+		}
+		return m, cmd
+	}
 	if m.activeTab == tabSend {
 		var cmd tea.Cmd
 		if key, ok := msg.(tea.KeyMsg); ok {
-			switch key.String() {
-			case "ctrl+enter", "alt+enter", "ctrl+s":
-				return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
-			case "up", "down", "pgup", "pgdown", "ctrl+u", "ctrl+d":
-				if m.focusIndex != 1 || strings.TrimSpace(m.msgInput.Value()) == "" {
-					return m, m.scrollSendViewport(key)
-				}
-			case "enter":
-				if m.focusIndex == 0 {
-					m.server.UpdateLastAgent(m.agentInput.Value())
-					m.focusIndex = 1
-					m.agentInput.Blur()
-					m.msgInput.Focus()
-				}
-			case "esc":
+			escPressed := isEscapeKey(key)
+			if escPressed {
 				m.focusIndex = 0
 				m.msgInput.Blur()
 				m.agentInput.Focus()
+			} else {
+				switch key.String() {
+				case "ctrl+enter", "alt+enter", "ctrl+s":
+					return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
+				case "up", "down", "pgup", "pgdown", "ctrl+u", "ctrl+d":
+					if m.focusIndex != 1 || strings.TrimSpace(m.msgInput.Value()) == "" {
+						return m, m.scrollSendViewport(key)
+					}
+				case "enter":
+					if m.focusIndex == 0 {
+						m.server.UpdateLastAgent(m.agentInput.Value())
+						m.focusIndex = 1
+						m.agentInput.Blur()
+						m.msgInput.Focus()
+					}
+				}
 			}
 		}
 		m.agentInput, cmd = m.agentInput.Update(msg)
@@ -2049,7 +2076,6 @@ func sendModalLayout(width, height int) (int, int, int) {
 	}
 	return inputWidth, msgHeight, logHeight
 }
-
 
 func (m model) viewHistory() string {
 	leftWidth, rightWidth, height, stacked := m.paneSizes()
@@ -3156,6 +3182,16 @@ func contains(slice []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func isEscapeKey(msg tea.KeyMsg) bool {
+	if msg.Type == tea.KeyEscape {
+		return true
+	}
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 0x1b {
+		return true
+	}
+	return msg.String() == "esc"
 }
 
 func (m *model) sendLogLayout() (int, int) {

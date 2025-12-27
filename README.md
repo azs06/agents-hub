@@ -141,6 +141,7 @@ Command palette commands:
 Default host/port: `127.0.0.1:8080`
 
 - `POST /` JSON-RPC endpoint
+- `POST /a2a` A2A JSON-RPC endpoint
 - `GET /health`
 - `GET /.well-known/agent.json`
 - `GET /.well-known/agents`
@@ -301,5 +302,5 @@ Each agent runs concurrently with its own streaming output.
 ## Notes
 
 - Agent CLIs (claude, gemini, codex, vibe) must be installed and available in `PATH`.
-- Unix socket is the default transport used by the CLI/TUI.
+- Unix socket is the default transport used by the CLI/TUI (CLI `send` will try A2A over HTTP first when available).
 - CLI/TUI send the current working directory to agents when available (Codex uses it for `--cd`).
