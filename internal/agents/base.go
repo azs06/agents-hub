@@ -1,7 +1,7 @@
 package agents
 
 import (
-	"a2a-go/internal/types"
+	"agents-hub/internal/types"
 )
 
 type Agent interface {

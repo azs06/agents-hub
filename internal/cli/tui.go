@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"a2a-go/internal/hub"
-	"a2a-go/internal/tui"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/hub"
+	"agents-hub/internal/tui"
+	"agents-hub/internal/utils"
 )
 
 func runTUI(args []string) int {

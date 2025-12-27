@@ -3,7 +3,7 @@ package agents
 import (
 	"strings"
 
-	"a2a-go/internal/types"
+	"agents-hub/internal/types"
 )
 
 // GeminiAgent wraps Gemini CLI with enhanced configuration

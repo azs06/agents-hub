@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"a2a-go/internal/types"
+	"agents-hub/internal/types"
 )
 
 // CodexAgent wraps Codex CLI with flexible configuration.

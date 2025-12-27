@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 
-	"a2a-go/internal/types"
+	"agents-hub/internal/types"
 )
 
 type agentItem struct {

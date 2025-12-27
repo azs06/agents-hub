@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"a2a-go/internal/types"
+	"agents-hub/internal/types"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"

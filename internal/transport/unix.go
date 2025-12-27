@@ -7,9 +7,9 @@ import (
 	"net"
 	"os"
 
-	"a2a-go/internal/hub"
-	"a2a-go/internal/jsonrpc"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/hub"
+	"agents-hub/internal/jsonrpc"
+	"agents-hub/internal/utils"
 )
 
 type UnixTransport struct {

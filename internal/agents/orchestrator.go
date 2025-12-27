@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"a2a-go/internal/jsonrpc"
-	"a2a-go/internal/types"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/jsonrpc"
+	"agents-hub/internal/types"
+	"agents-hub/internal/utils"
 )
 
 type RPCCaller interface {

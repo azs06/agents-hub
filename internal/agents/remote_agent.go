@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"a2a-go/internal/types"
+	"agents-hub/internal/types"
 
 	sdka2a "github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"a2a-go/internal/hub"
+	"agents-hub/internal/hub"
 )
 
 func setHubEnv(cfg hub.Config) {

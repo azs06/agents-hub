@@ -22,10 +22,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"a2a-go/internal/hub"
-	"a2a-go/internal/transport"
-	"a2a-go/internal/types"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/hub"
+	"agents-hub/internal/transport"
+	"agents-hub/internal/types"
+	"agents-hub/internal/utils"
 )
 
 const (

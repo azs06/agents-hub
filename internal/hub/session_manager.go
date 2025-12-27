@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"a2a-go/internal/utils"
+	"agents-hub/internal/utils"
 )
 
 // SessionManager handles session persistence and retrieval

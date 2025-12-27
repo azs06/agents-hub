@@ -3,7 +3,7 @@ package hub
 import (
 	"context"
 
-	"a2a-go/internal/jsonrpc"
+	"agents-hub/internal/jsonrpc"
 )
 
 type LocalCaller struct {

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"a2a-go/internal/cli"
+	"agents-hub/internal/cli"
 )
 
 func main() {

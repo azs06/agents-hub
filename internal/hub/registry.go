@@ -4,9 +4,9 @@ import (
 	"sync"
 	"time"
 
-	"a2a-go/internal/agents"
-	"a2a-go/internal/types"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/agents"
+	"agents-hub/internal/types"
+	"agents-hub/internal/utils"
 )
 
 type AgentInfo struct {

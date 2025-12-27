@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"a2a-go/internal/agents"
+	"agents-hub/internal/agents"
 )
 
 // RemoteAgentRegistry manages external A2A agents

@@ -17,12 +17,12 @@ import (
 	"syscall"
 	"time"
 
-	internala2a "a2a-go/internal/a2a"
-	"a2a-go/internal/hub"
-	"a2a-go/internal/jsonrpc"
-	"a2a-go/internal/transport"
-	"a2a-go/internal/types"
-	"a2a-go/internal/utils"
+	internala2a "agents-hub/internal/a2a"
+	"agents-hub/internal/hub"
+	"agents-hub/internal/jsonrpc"
+	"agents-hub/internal/transport"
+	"agents-hub/internal/types"
+	"agents-hub/internal/utils"
 
 	sdka2a "github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"

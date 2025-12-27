@@ -1,4 +1,4 @@
-module a2a-go
+module agents-hub
 
 go 1.24.4
 

@@ -3,7 +3,7 @@ package a2a
 import (
 	"context"
 
-	"a2a-go/internal/hub"
+	"agents-hub/internal/hub"
 
 	sdka2a "github.com/a2aproject/a2a-go/a2a"
 )

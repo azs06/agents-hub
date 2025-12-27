@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"a2a-go/internal/types"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/types"
+	"agents-hub/internal/utils"
 )
 
 // RemoteAgentConfig defines configuration for a remote A2A agent

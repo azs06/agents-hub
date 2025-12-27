@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"a2a-go/internal/types"
-	"a2a-go/internal/utils"
+	"agents-hub/internal/types"
+	"agents-hub/internal/utils"
 )
 
 type TaskManager struct {
