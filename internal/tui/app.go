@@ -76,9 +76,20 @@ var (
 			Padding(0, 1)
 )
 
-// Simple logo text
-const logoAgentsText = "agents"
-const logoHubText = "hub"
+// ASCII art logo lines - "agents" part (dim) and "hub" part (bright)
+var logoAgentsLines = []string{
+	"       _   ___ ___ _  _ _____ ___ ",
+	"      /_\\ / __| __| \\| |_   _/ __|",
+	"     / _ \\ (_ | _|| .` | | | \\__ \\",
+	"    /_/ \\_\\___|___|_|\\_| |_| |___/",
+}
+
+var logoHubLines = []string{
+	" _  _ _   _ ___ ",
+	"| || | | | | _ )",
+	"| __ | |_| | _ \\",
+	"|_||_|\\___/|___/",
+}
 
 type statusData struct {
 	Version     string `json:"version"`
@@ -130,10 +141,9 @@ type model struct {
 	detailViewport         viewport.Model
 	keys                   keyMap
 	help                   help.Model
-	showHelp               bool
-	commandMode            bool
-	commandModeFromWelcome bool // track if command mode was entered from welcome screen
-	commandInput           textinput.Model
+	showHelp     bool
+	commandMode  bool
+	commandInput textinput.Model
 	commandHistory         []string
 	historyIndex           int
 	commandIndex           int
@@ -206,9 +216,6 @@ type model struct {
 	showAgentPicker    bool
 	agentPickerIndex   int
 	agentPickerOptions []string
-
-	// Welcome screen
-	showWelcome bool
 }
 
 // AgentStream holds the channels for streaming communication with an agent
@@ -429,7 +436,6 @@ func Run(cfg hub.Config, logger *utils.Logger) error {
 		vibeIncludeHistory:  vibeSettings.IncludeHistory,
 		settingsFocusIndex:  0,
 		showSendModal:       false,
-		showWelcome:         true,
 		activeAgents:        make(map[string]string),
 		agentProgress:       make(map[string]string),
 		streamChannels:      make(map[string]*AgentStream),
@@ -596,10 +602,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyMsg:
 		escPressed := isEscapeKey(msg)
-		// Debug: log all key presses
-		if escPressed {
-			m.addLog("debug", fmt.Sprintf("KEY: esc, showWelcome=%v, commandMode=%v, commandModeFromWelcome=%v", m.showWelcome, m.commandMode, m.commandModeFromWelcome))
-		}
 		// Global agent picker handler - works in all views
 		if m.showAgentPicker {
 			if escPressed {
@@ -625,57 +627,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showAgentPicker = false
 				return m, nil
 			}
-			return m, nil
-		}
-
-		// Handle welcome screen interactions
-		if m.showWelcome && !m.commandMode {
-			if escPressed {
-				// Exit welcome, enter command mode
-				m.showWelcome = false
-				m.showSendModal = true
-				m.commandMode = true
-				m.commandModeFromWelcome = true
-				m.commandInput.Focus()
-				m.historyIndex = len(m.commandHistory)
-				m.commandIndex = 0
-				m.updateCommandResults()
-				return m, nil
-			}
-			switch msg.String() {
-			case "/":
-				if strings.TrimSpace(m.msgInput.Value()) == "" {
-					// Exit welcome, enter command mode
-					m.showWelcome = false
-					m.showSendModal = true
-					m.commandMode = true
-					m.commandModeFromWelcome = true // remember we came from welcome screen
-					m.commandInput.Focus()
-					m.historyIndex = len(m.commandHistory)
-					m.commandIndex = 0
-					m.updateCommandResults()
-					return m, nil
-				}
-			case "enter":
-				// Send message and exit welcome
-				text := strings.TrimSpace(m.msgInput.Value())
-				if text != "" {
-					m.showWelcome = false
-					m.showSendModal = true
-					return m, m.startSend(m.agentInput.Value(), m.msgInput.Value())
-				}
-				return m, nil
-			case "shift+a", "A":
-				// Open agent picker
-				m.showAgentPicker = true
-				m.agentPickerIndex = 0
-				m.agentPickerOptions = m.getAgentIDs()
-				return m, nil
-			case "ctrl+c":
-				return m, tea.Quit
-			}
-			// Pass other keys to message input
-			m.msgInput, _ = m.msgInput.Update(msg)
 			return m, nil
 		}
 
@@ -811,28 +762,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.commandMode {
 			if escPressed {
-				m.addLog("debug", fmt.Sprintf("ESC in command mode: commandModeFromWelcome=%v", m.commandModeFromWelcome))
 				m.commandMode = false
 				m.commandInput.Blur()
 				m.commandInput.SetValue("")
 				m.historyIndex = len(m.commandHistory)
 				m.commandIndex = 0
 
-				if m.commandModeFromWelcome {
-					// Return to welcome screen if command palette opened from there.
-					m.showWelcome = true
-					m.showSendModal = false
-					m.commandModeFromWelcome = false
-					m.msgInput.Focus()
-					m.addLog("debug", "Returning to welcome screen")
-					return m, nil
-				}
-				m.commandModeFromWelcome = false
-
-				if m.showWelcome {
-					m.msgInput.Focus()
-					return m, nil
-				}
 				if m.showSendModal || m.activeTab == tabSend {
 					if m.focusIndex == 0 {
 						m.msgInput.Blur()
@@ -859,7 +794,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandInput.SetValue("")
 				m.commandInput.Blur()
 				m.commandMode = false
-				m.commandModeFromWelcome = false
 				m.historyIndex = len(m.commandHistory)
 				m.commandIndex = 0
 				if cmdText == "" {
@@ -1173,24 +1107,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	// Show welcome screen if enabled
-	if m.showWelcome {
-		base := m.viewWelcome()
-		// Handle agent picker overlay on welcome screen
-		if m.showAgentPicker {
-			pickerWidth := 40
-			if m.width > 0 && m.width/2 > pickerWidth {
-				pickerWidth = m.width / 2
-			}
-			return overlayModal(dimStyle.Render(base), m.renderAgentPicker(pickerWidth), m.width, m.height)
-		}
-		// Handle command mode overlay on welcome screen
-		if m.commandMode {
-			return overlayModal(dimStyle.Render(base), m.renderCommandModal(), m.width, m.height)
-		}
-		return base
-	}
-
 	header := headerStyle.Render("A2A Hub")
 	statusBar := m.renderStatusBar()
 	viewLine := dimStyle.Render("View: " + m.viewName())
@@ -1896,7 +1812,29 @@ func (m model) viewTasks() string {
 
 func (m model) viewSend() string {
 	width, height := m.bodySize()
-	inputWidth, msgHeight, logHeight := sendViewLayout(width, height)
+
+	// Render the logo centered
+	logo := renderLogo()
+	logoLines := strings.Split(logo, "\n")
+	var centeredLogo []string
+	for _, line := range logoLines {
+		lineWidth := lipgloss.Width(line)
+		leftPad := (width - lineWidth) / 2
+		if leftPad < 0 {
+			leftPad = 0
+		}
+		centeredLogo = append(centeredLogo, strings.Repeat(" ", leftPad)+line)
+	}
+	logoStr := strings.Join(centeredLogo, "\n")
+
+	// Adjust layout to account for logo height
+	logoHeight := len(logoLines) + 2 // logo + spacing
+	adjustedHeight := height - logoHeight
+	if adjustedHeight < 10 {
+		adjustedHeight = 10
+	}
+
+	inputWidth, msgHeight, logHeight := sendViewLayout(width, adjustedHeight)
 	// Account for border width when setting textarea dimensions
 	m.msgInput.SetWidth(inputWidth - 4)
 	m.msgInput.SetHeight(msgHeight)
@@ -1912,6 +1850,8 @@ func (m model) viewSend() string {
 	helpText := dimStyle.Render("shift+A agents  ctrl+p commands  enter send")
 
 	lines := []string{
+		logoStr,
+		"",
 		log,
 		msgBox,
 		agentLabel,
@@ -2115,130 +2055,16 @@ func (m model) viewActivity() string {
 	return m.renderTaskActivity(width, height)
 }
 
-// renderLogo renders the two-tone "agents hub" styled logo
+// renderLogo renders the two-tone ASCII art "agents hub" logo
 func renderLogo() string {
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true)
-	brightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	brightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 
-	return dimStyle.Render(logoAgentsText) + brightStyle.Render(logoHubText)
-}
-
-// viewWelcome renders the welcome screen with logo and message input
-func (m model) viewWelcome() string {
-	// Get terminal dimensions
-	width := m.width
-	height := m.height
-	if width <= 0 {
-		width = 80
-	}
-	if height <= 0 {
-		height = 24
-	}
-
-	// Render the logo
-	logo := renderLogo()
-	logoLines := strings.Split(logo, "\n")
-	logoHeight := len(logoLines)
-
-	// Message input box - simple style for welcome screen
-	msgWidth := 50
-	if msgWidth > width-10 {
-		msgWidth = width - 10
-	}
-
-	// Light green color for welcome screen
-	lightGreen := lipgloss.Color("120")
-
-	// Build input content manually (cleaner than textarea for welcome)
-	inputContent := m.msgInput.Value()
-	cursorStyle := lipgloss.NewStyle().Reverse(true)
-	if inputContent == "" {
-		// Show placeholder with cursor
-		inputContent = "> " + cursorStyle.Render(" ") + dimStyle.Render("message")
-	} else {
-		// Show content with cursor at end
-		inputContent = "> " + inputContent + cursorStyle.Render(" ")
-	}
-
-	// Pad to fill width
-	contentWidth := lipgloss.Width(inputContent)
-	if contentWidth < msgWidth-4 {
-		inputContent += strings.Repeat(" ", msgWidth-4-contentWidth)
-	}
-
-	// Simple box style with rounded border in light green
-	welcomeBoxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lightGreen).
-		Padding(0, 1)
-
-	msgBox := welcomeBoxStyle.Render(inputContent)
-
-	// Agent label (in light green to match)
-	agentLabel := lipgloss.NewStyle().Foreground(lightGreen).Render(m.agentInput.Value())
-
-	// Help text
-	helpText := dimStyle.Render("shift+A agents   / commands")
-
-	// Calculate vertical centering
-	contentHeight := logoHeight + 3 + 3 + 1 + 1 // logo + spacing + msgbox + agent + help
-	topPadding := (height - contentHeight) / 2
-	if topPadding < 0 {
-		topPadding = 0
-	}
-
-	// Build the view
 	var lines []string
-
-	// Top padding
-	for i := 0; i < topPadding; i++ {
-		lines = append(lines, "")
+	for i := 0; i < len(logoAgentsLines); i++ {
+		line := dimStyle.Render(logoAgentsLines[i]) + brightStyle.Render(logoHubLines[i])
+		lines = append(lines, line)
 	}
-
-	// Logo (centered)
-	for _, line := range logoLines {
-		lineWidth := lipgloss.Width(line)
-		leftPad := (width - lineWidth) / 2
-		if leftPad < 0 {
-			leftPad = 0
-		}
-		lines = append(lines, strings.Repeat(" ", leftPad)+line)
-	}
-
-	// Spacing
-	lines = append(lines, "")
-	lines = append(lines, "")
-
-	// Message box (centered) - must center each line of the box
-	msgBoxWidth := lipgloss.Width(msgBox)
-	msgLeftPad := (width - msgBoxWidth) / 2
-	if msgLeftPad < 0 {
-		msgLeftPad = 0
-	}
-	// Split msgBox by lines and add padding to each line
-	for _, boxLine := range strings.Split(msgBox, "\n") {
-		lines = append(lines, strings.Repeat(" ", msgLeftPad)+boxLine)
-	}
-
-	// Agent label (centered under message box)
-	agentWidth := lipgloss.Width(agentLabel)
-	agentLeftPad := (width - agentWidth) / 2
-	if agentLeftPad < 0 {
-		agentLeftPad = 0
-	}
-	lines = append(lines, strings.Repeat(" ", agentLeftPad)+agentLabel)
-
-	// Spacing
-	lines = append(lines, "")
-
-	// Help text (centered)
-	helpWidth := lipgloss.Width(helpText)
-	helpLeftPad := (width - helpWidth) / 2
-	if helpLeftPad < 0 {
-		helpLeftPad = 0
-	}
-	lines = append(lines, strings.Repeat(" ", helpLeftPad)+helpText)
-
 	return strings.Join(lines, "\n")
 }
 

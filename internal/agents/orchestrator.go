@@ -59,6 +59,9 @@ func (o *Orchestrator) CheckHealth() (types.AgentHealth, error) {
 	return types.AgentHealth{Status: "healthy", LastCheck: time.Now().UTC()}, nil
 }
 
+// DefaultOrchestratorTimeout is used when no timeout is specified (10 minutes)
+const DefaultOrchestratorTimeout = 10 * time.Minute
+
 func (o *Orchestrator) Execute(ctx types.ExecutionContext) (types.ExecutionResult, error) {
 	prompt := extractMessageText(ctx.UserMessage)
 	if prompt == "" {
@@ -71,6 +74,15 @@ func (o *Orchestrator) Execute(ctx types.ExecutionContext) (types.ExecutionResul
 	if len(parts) == 0 {
 		parts = []string{prompt}
 	}
+
+	// Use default timeout if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultOrchestratorTimeout
+	}
+	// Create a context with timeout for all delegate calls
+	callCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	results := make([]string, 0, len(parts))
 	for i, part := range parts {
@@ -92,10 +104,10 @@ func (o *Orchestrator) Execute(ctx types.ExecutionContext) (types.ExecutionResul
 			"message": msg,
 			"configuration": map[string]any{
 				"historyLength": 10,
-				"timeout":       int(ctx.Timeout / time.Millisecond),
+				"timeout":       int(timeout / time.Millisecond),
 			},
 		})
-		resp, err := o.caller.Call(context.Background(), "message/send", params)
+		resp, err := o.caller.Call(callCtx, "message/send", params)
 		if err != nil {
 			results = append(results, fmt.Sprintf("%s: error: %v", agentID, err))
 			continue

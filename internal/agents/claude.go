@@ -100,6 +100,11 @@ func (a *ClaudeAgent) extractClaudeConfig(ctx types.ExecutionContext) types.Clau
 	return config
 }
 
+// DefaultClaudeAllowedTools are tools enabled by default for non-interactive mode
+var DefaultClaudeAllowedTools = []string{
+	"Read", "Write", "Edit", "Glob", "Grep", "Bash",
+}
+
 // buildArgs constructs CLI arguments from ClaudeConfig
 func (a *ClaudeAgent) buildArgs(config types.ClaudeConfig) []string {
 	args := []string{}
@@ -116,7 +121,7 @@ func (a *ClaudeAgent) buildArgs(config types.ClaudeConfig) []string {
 		args = append(args, "--model", string(config.Model))
 	}
 
-	// Tool restrictions
+	// Tool permissions - use explicit config, profile, or defaults
 	if len(config.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(config.AllowedTools, ","))
 	} else if config.ToolProfile != "" && config.ToolProfile != types.ClaudeToolsDefault {
@@ -124,6 +129,9 @@ func (a *ClaudeAgent) buildArgs(config types.ClaudeConfig) []string {
 		if len(tools) > 0 {
 			args = append(args, "--allowedTools", strings.Join(tools, ","))
 		}
+	} else {
+		// Default: allow common tools for non-interactive file operations
+		args = append(args, "--allowedTools", strings.Join(DefaultClaudeAllowedTools, ","))
 	}
 
 	// Base args (prompt and output format)

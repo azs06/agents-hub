@@ -14,7 +14,19 @@ This is a Go implementation of the A2A Local Hub defined in `SPECIFICATION.md`. 
 - **Codex flexibility**: Model/profile selection, sandbox + approval policy, web search
 - Multi-agent support with @mentions (`@claude task1, @gemini task2`)
 
-## Build
+## Installation
+
+### From Source
+
+```bash
+git clone https://github.com/soikat/agents-hub.git
+cd agents-hub
+go install ./cmd/agents-hub
+```
+
+This installs the `agents-hub` binary to your `$GOPATH/bin` (or `$GOBIN` if set).
+
+### Build Only
 
 ```bash
 go build ./cmd/agents-hub

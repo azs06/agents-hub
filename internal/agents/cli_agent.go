@@ -73,6 +73,9 @@ func (a *CLIAgent) CheckHealth() (types.AgentHealth, error) {
 	return types.AgentHealth{Status: "healthy", LastCheck: time.Now().UTC(), LatencyMs: time.Since(start).Milliseconds()}, nil
 }
 
+// DefaultAgentTimeout is used when no timeout is specified (10 minutes)
+const DefaultAgentTimeout = 10 * time.Minute
+
 func (a *CLIAgent) Execute(ctx types.ExecutionContext) (types.ExecutionResult, error) {
 	prompt := extractPromptWithHistory(ctx.UserMessage, ctx.PreviousHistory)
 	if prompt == "" {
@@ -87,12 +90,13 @@ func (a *CLIAgent) Execute(ctx types.ExecutionContext) (types.ExecutionResult, e
 		}
 		args = append(args, arg)
 	}
-	execCtx := context.Background()
-	if ctx.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(execCtx, ctx.Timeout)
-		defer cancel()
+	// Always use a timeout - default to 10 minutes if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultAgentTimeout
 	}
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	command := exec.CommandContext(execCtx, a.config.Exec, args...)
 	applyExecutionContext(command, ctx)
 	stdin, _ := command.StdinPipe()
@@ -154,12 +158,13 @@ func (a *CLIAgent) ExecuteStreaming(ctx types.ExecutionContext, output chan<- ty
 		args = append(args, arg)
 	}
 
-	execCtx := context.Background()
-	if ctx.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(execCtx, ctx.Timeout)
-		defer cancel()
+	// Always use a timeout - default to 10 minutes if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultAgentTimeout
 	}
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	command := exec.CommandContext(execCtx, a.config.Exec, args...)
 	applyExecutionContext(command, ctx)
@@ -247,12 +252,13 @@ func (a *CLIAgent) ExecuteWithArgs(ctx types.ExecutionContext, customArgs []stri
 		}
 		args = append(args, arg)
 	}
-	execCtx := context.Background()
-	if ctx.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(execCtx, ctx.Timeout)
-		defer cancel()
+	// Always use a timeout - default to 10 minutes if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultAgentTimeout
 	}
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	command := exec.CommandContext(execCtx, a.config.Exec, args...)
 	applyExecutionContext(command, ctx)
 	stdin, _ := command.StdinPipe()
@@ -310,12 +316,13 @@ func (a *CLIAgent) ExecuteStreamingWithArgs(ctx types.ExecutionContext, customAr
 		args = append(args, arg)
 	}
 
-	execCtx := context.Background()
-	if ctx.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(execCtx, ctx.Timeout)
-		defer cancel()
+	// Always use a timeout - default to 10 minutes if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultAgentTimeout
 	}
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	command := exec.CommandContext(execCtx, a.config.Exec, args...)
 	applyExecutionContext(command, ctx)

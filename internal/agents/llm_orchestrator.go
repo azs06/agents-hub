@@ -201,20 +201,21 @@ func (o *LLMOrchestrator) sendToAgent(ctx types.ExecutionContext, agentID, text 
 	if strings.TrimSpace(ctx.WorkingDir) != "" {
 		msg.Metadata["workingDirectory"] = ctx.WorkingDir
 	}
-	configuration := map[string]any{"historyLength": 10}
-	if ctx.Timeout > 0 {
-		configuration["timeout"] = int(ctx.Timeout / time.Millisecond)
+	// Use default timeout if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultOrchestratorTimeout
+	}
+	configuration := map[string]any{
+		"historyLength": 10,
+		"timeout":       int(timeout / time.Millisecond),
 	}
 	params, _ := json.Marshal(map[string]any{
 		"message":       msg,
 		"configuration": configuration,
 	})
-	execCtx := context.Background()
-	if ctx.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(execCtx, ctx.Timeout)
-		defer cancel()
-	}
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	resp, err := o.caller.Call(execCtx, "message/send", params)
 	if err != nil {
 		return types.Task{}, err
@@ -259,12 +260,13 @@ func (o *LLMOrchestrator) fetchAgentInfo(ctx types.ExecutionContext) ([]struct {
 	Card types.AgentCard `json:"card"`
 }, error) {
 	params, _ := json.Marshal(map[string]any{"includeHealth": false})
-	execCtx := context.Background()
-	if ctx.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(execCtx, ctx.Timeout)
-		defer cancel()
+	// Use default timeout if none specified
+	timeout := ctx.Timeout
+	if timeout <= 0 {
+		timeout = DefaultOrchestratorTimeout
 	}
+	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	resp, err := o.caller.Call(execCtx, "hub/agents/list", params)
 	if err != nil {
 		return nil, err

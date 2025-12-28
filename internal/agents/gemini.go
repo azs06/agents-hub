@@ -119,10 +119,16 @@ func (a *GeminiAgent) buildArgs(config types.GeminiConfig) []string {
 		args = append(args, "--sandbox")
 	}
 
+	// Approval mode - use config or default to auto_edit for file operations
+	// Note: --allowed-tools is ignored in non-interactive mode, so we need approval-mode
 	if config.ApprovalMode != "" {
 		args = append(args, "--approval-mode", config.ApprovalMode)
+	} else {
+		// Default to auto_edit to allow file writes without full yolo mode
+		args = append(args, "--approval-mode", "auto_edit")
 	}
 
+	// Note: --allowed-tools only works in interactive mode, ignored with -p
 	if len(config.AllowedTools) > 0 {
 		args = append(args, "--allowed-tools", strings.Join(config.AllowedTools, ","))
 	}
@@ -131,8 +137,8 @@ func (a *GeminiAgent) buildArgs(config types.GeminiConfig) []string {
 		args = append(args, "--include-directories", strings.Join(config.IncludeDirectories, ","))
 	}
 
-	// Base args
-	args = append(args, "{prompt}", "-o", "text")
+	// Base args: use -p for explicit non-interactive mode
+	args = append(args, "-p", "{prompt}", "-o", "text")
 
 	return args
 }
